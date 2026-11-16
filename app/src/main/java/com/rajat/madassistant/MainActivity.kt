@@ -9,7 +9,6 @@ import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
 import android.widget.ArrayAdapter
-import android.widget.AutoCompleteTextView
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -32,6 +31,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnStart: Button
     private lateinit var btnSettings: Button
     private lateinit var targetAppManager: TargetAppManager
+
+    /** Abhi kaunsa model select hai (dialog ke andar badalta hai). */
+    private var selectedModel: String = AiBrainClient.defaultModel()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -111,6 +113,11 @@ class MainActivity : AppCompatActivity() {
             setPadding(pad, pad, pad, 0)
         }
 
+        // Saved model load karo
+        selectedModel = getSharedPreferences(PREFS, MODE_PRIVATE)
+            .getString(KEY_MODEL, AiBrainClient.defaultModel())!!
+            .ifBlank { AiBrainClient.defaultModel() }
+
         val input = EditText(this).apply {
             hint = getString(R.string.api_key_hint)
             setText(getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_API, ""))
@@ -119,17 +126,19 @@ class MainActivity : AppCompatActivity() {
         }
         container.addView(input)
 
-        // --- AI Model dropdown ---
-        container.addView(label("AI Model"))
-        val modelInput = AutoCompleteTextView(this).apply {
-            inputType = InputType.TYPE_NULL
-            keyListener = null
-            setText(getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_MODEL, AiBrainClient.defaultModel()))
-            setAdapter(
-                ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, AiBrainClient.AVAILABLE_MODELS)
-            )
+        // --- AI Model: tap karo to list dialog khulega (tick ke saath) ---
+        val label = TextView(this).apply {
+            text = "AI Model (tap to change)"
+            textSize = 12f
+            setPadding(0, pad, 0, 0)
         }
-        container.addView(modelInput)
+        container.addView(label)
+
+        val modelButton = Button(this).apply {
+            text = "⚙️  $selectedModel"
+            setOnClickListener { showModelPicker { modelButton.text = "⚙️  $selectedModel" } }
+        }
+        container.addView(modelButton)
 
         // --- Test result line ---
         val testStatus = TextView(this).apply {
@@ -151,12 +160,11 @@ class MainActivity : AppCompatActivity() {
                     testStatus.setTextColor(Color.RED)
                     return@setOnClickListener
                 }
-                val model = modelInput.text.toString().trim()
                 testStatus.text = "⏳ Testing…"
                 testStatus.setTextColor(Color.parseColor("#B58900"))
                 isEnabled = false
                 CoroutineScope(Dispatchers.Main).launch {
-                    val result = AiBrainClient.testConnection(key, model)
+                    val result = AiBrainClient.testConnection(key, selectedModel)
                     if (result.ok) {
                         testStatus.text = "🟢 ${result.message}"
                         testStatus.setTextColor(Color.parseColor("#0A8F2E"))
@@ -176,7 +184,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(R.string.btn_save_key) { _, _ ->
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .putString(KEY_API, input.text.toString().trim())
-                    .putString(KEY_MODEL, modelInput.text.toString().trim())
+                    .putString(KEY_MODEL, selectedModel)
                     .apply()
                 statusText.setText(R.string.status_key_saved)
             }
@@ -184,14 +192,20 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun label(text: String): TextView = TextView(this).apply {
-        this.text = text
-        textSize = 12f
-        setPadding(0, pad, 0, 0)
+    /** Model list — tap par tick ke saath select hota hai. */
+    private fun showModelPicker(onPicked: () -> Unit) {
+        val models = AiBrainClient.AVAILABLE_MODELS
+        val current = models.indexOf(selectedModel).let { if (it >= 0) it else 0 }
+        AlertDialog.Builder(this)
+            .setTitle("AI Model chuno")
+            .setSingleChoiceItems(models.toTypedArray(), current) { dialog, which ->
+                selectedModel = models[which]
+                onPicked()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
-
-    private val pad: Int
-        get() = (8 * resources.displayMetrics.density).toInt()
 
     private fun showAppPicker() {
         val apps = targetAppManager.getLaunchableApps()
@@ -232,7 +246,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
-        private const val REQ_PERMISSIONS = 1001
+        private const val REQ_PERMISSIONMS = 1001
+        private const val REQ_PERMISSIONS = REQ_PERMISSIONMS
         private const val PREFS = "mad_prefs"
         private const val KEY_API = "gemini_api_key"
         private const val KEY_MODEL = "gemini_model"
