@@ -22,7 +22,7 @@ import java.util.Locale
  * The orchestrator: wake word -> listen -> decide -> speak (+ show bubble).
  * Offline skills: remember/recall facts, open apps, WhatsApp/call/browser/email,
  * time/date, reminders.
- * Online skill: full AI conversation via Gemini (needs API key).
+ * Online skill: full AI conversation (Gemini/OpenAI/Claude/Grok — needs API key).
  */
 class AssistantEngine(private val context: Context) {
 
@@ -138,22 +138,24 @@ class AssistantEngine(private val context: Context) {
 
     private suspend fun askBrain(text: String): String {
         val key = prefs.getString(KEY_API, "").orEmpty()
-        val model = prefs.getString(KEY_MODEL, AiBrainClient.defaultModel())
-            .orEmpty().ifBlank { AiBrainClient.defaultModel() }
-        val facts = dao.recentFacts().joinToString("\n") { "- ${it.content}" }
-        return if (key.isNotBlank()) {
-            AiBrainClient.ask(key, model, text, facts)
-        } else {
-            "अभी मैं ये काम कर सकता हूँ: WhatsApp या कोई भी app खोलना, call करना, " +
+        if (key.isBlank()) {
+            return "अभी मैं ये काम कर सकता हूँ: WhatsApp या कोई भी app खोलना, call करना, " +
                 "browser और email खोलना, time और date बताना, reminder लगाना, और याद रखना। " +
-                "पूरी बातचीत के लिए app में Gemini API key डालिए।"
+                "पूरी बातचीत के लिए Settings में API key डालिए।"
         }
+        val provider = prefs.getString(KEY_PROVIDER, AiBrainClient.defaultProvider())
+            .orEmpty().ifBlank { AiBrainClient.defaultProvider() }
+        val model = prefs.getString(KEY_MODEL, "")
+            .orEmpty().ifBlank { AiBrainClient.defaultModel(provider) }
+        val facts = dao.recentFacts().joinToString("\n") { "- ${it.content}" }
+        return AiBrainClient.ask(provider, key, model, text, facts)
     }
 
     companion object {
         private const val PREFS = "mad_prefs"
         private const val KEY_API = "gemini_api_key"
-        private const val KEY_MODEL = "gemini_model"
+        private const val KEY_PROVIDER = "ai_provider"
+        private const val KEY_MODEL = "ai_model"
         private const val ROLE_USER = "user"
         private const val ROLE_MAD = "mad"
         private const val WAKE_REPLY = "हाँ, बोलिए।"
