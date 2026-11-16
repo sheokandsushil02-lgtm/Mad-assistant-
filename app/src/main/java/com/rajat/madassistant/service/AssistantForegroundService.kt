@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import com.rajat.madassistant.R
 import com.rajat.madassistant.core.AssistantEngine
@@ -30,6 +31,15 @@ class AssistantForegroundService : Service() {
         if (engine == null) {
             engine = AssistantEngine(this).also { it.start() }
         }
+
+        // Settings / orb / mic-button se aane wale actions (wake word nahi chahiye)
+        when (intent?.action) {
+            ACTION_LISTEN_NOW -> engine?.listenNow()
+            ACTION_RELOAD -> engine?.reload()
+            ACTION_TEST_VOICE -> engine?.testVoice()
+        }
+
+        startOverlay()
         isRunning = true
         return START_STICKY
     }
@@ -38,7 +48,15 @@ class AssistantForegroundService : Service() {
         isRunning = false
         engine?.stop()
         engine = null
+        runCatching { stopService(Intent(this, FloatingOverlayService::class.java)) }
         super.onDestroy()
+    }
+
+    /** Jarvis-style floating orb (agar overlay permission di hai). */
+    private fun startOverlay() {
+        if (Settings.canDrawOverlays(this)) {
+            runCatching { startService(Intent(this, FloatingOverlayService::class.java)) }
+        }
     }
 
     private fun createNotificationChannel() {
@@ -78,6 +96,10 @@ class AssistantForegroundService : Service() {
     companion object {
         private const val CHANNEL_ID = "mad_assistant_channel"
         private const val NOTIFICATION_ID = 1
+
+        const val ACTION_LISTEN_NOW = "com.rajat.madassistant.LISTEN_NOW"
+        const val ACTION_RELOAD = "com.rajat.madassistant.RELOAD"
+        const val ACTION_TEST_VOICE = "com.rajat.madassistant.TEST_VOICE"
 
         /** MainActivity isse check karta hai ki assistant chal raha hai ya nahi. */
         @Volatile
