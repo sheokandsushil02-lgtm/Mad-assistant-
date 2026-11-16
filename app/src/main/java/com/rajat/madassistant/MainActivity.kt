@@ -5,22 +5,65 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.ListView
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.rajat.madassistant.core.TargetAppManager
 import com.rajat.madassistant.service.AssistantForegroundService
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var statusText: TextView
+    private lateinit var btnSelectTarget: Button
+    private lateinit var btnStart: Button
+    private lateinit var targetAppManager: TargetAppManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         statusText = findViewById(R.id.statusText)
-        findViewById<Button>(R.id.btnStart).setOnClickListener { startAssistant() }
+        btnSelectTarget = findViewById(R.id.btnSelectTarget)
+        btnStart = findViewById(R.id.btnStart)
+        targetAppManager = TargetAppManager(this)
+
+        btnSelectTarget.setOnClickListener { showAppPicker() }
+        btnStart.setOnClickListener { startAssistant() }
+        updateTargetLabel()
+    }
+
+    private fun showAppPicker() {
+        val apps = targetAppManager.getLaunchableApps()
+        if (apps.isEmpty()) {
+            statusText.setText(R.string.status_no_apps)
+            return
+        }
+        val labels = apps.map { "${it.label}  (${it.packageName})" }
+        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, labels)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.select_target_title)
+            .setAdapter(adapter) { _, which ->
+                targetAppManager.targetPackage = apps[which].packageName
+                updateTargetLabel()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun updateTargetLabel() {
+        val pkg = targetAppManager.targetPackage
+        if (pkg.isEmpty()) {
+            btnSelectTarget.setText(R.string.btn_select_target)
+            btnStart.isEnabled = false
+        } else {
+            btnSelectTarget.text = getString(R.string.btn_target_selected, targetAppManager.labelFor(pkg))
+            btnStart.isEnabled = true
+        }
     }
 
     private fun startAssistant() {
