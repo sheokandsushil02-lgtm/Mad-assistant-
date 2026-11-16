@@ -116,5 +116,10 @@
             </intent-filter>
         </receiver>
 
+        <!-- Fires when a reminder alarm goes off -->
+        <receiver
+            android:name=".skill.ReminderManager$ReminderReceiver"
+            android:exported="false" />
+
     </application>
 </manifest>
