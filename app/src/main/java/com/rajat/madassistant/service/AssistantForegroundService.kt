@@ -30,10 +30,12 @@ class AssistantForegroundService : Service() {
         if (engine == null) {
             engine = AssistantEngine(this).also { it.start() }
         }
+        isRunning = true
         return START_STICKY
     }
 
     override fun onDestroy() {
+        isRunning = false
         engine?.stop()
         engine = null
         super.onDestroy()
@@ -76,5 +78,10 @@ class AssistantForegroundService : Service() {
     companion object {
         private const val CHANNEL_ID = "mad_assistant_channel"
         private const val NOTIFICATION_ID = 1
+
+        /** MainActivity isse check karta hai ki assistant chal raha hai ya nahi. */
+        @Volatile
+        var isRunning: Boolean = false
+            private set
     }
 }
