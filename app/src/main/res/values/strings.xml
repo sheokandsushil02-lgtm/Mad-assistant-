@@ -15,6 +15,10 @@
     <string name="status_permission_needed">Microphone and notification permissions are required. Tap Start again after granting.</string>
     <string name="status_listening">Assistant running. Say Hey Mad.</string>
     <string name="status_key_saved">API key saved. MAD will now answer with AI.</string>
+    <string name="debug_console_title">Live Debug Console</string>
+    <string name="debug_mic">Mic: idle</string>
+    <string name="debug_ai">AI: idle</string>
+    <string name="debug_tts">TTS: idle</string>
     <string name="notification_channel_name">MAD Assistant</string>
     <string name="notification_channel_description">Keeps the assistant listening for the wake word in the background.</string>
     <string name="notification_title">MAD Assistant</string>
