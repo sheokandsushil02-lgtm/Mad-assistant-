@@ -12,10 +12,10 @@ import android.speech.SpeechRecognizer
 /**
  * Always-on listening loop built on Android's built-in SpeechRecognizer.
  *
- * The SAME recognizer instance is reused for every session, so the engine is
- * created once and stays alive permanently until stop() is called. Sessions
- * re-arm quickly after results/errors, and long silence windows keep the mic
- * from switching off too soon in quiet surroundings.
+ * The SAME recognizer instance is reused for every session. Sessions re-arm
+ * automatically after ERROR_NO_MATCH / ERROR_SPEECH_TIMEOUT without crashing,
+ * and long silence windows keep the mic alive in quiet surroundings.
+ * Language mode (hinglish/hindi/english) Settings se live padha jaata hai.
  */
 class VoiceLoop(
     private val context: Context,
@@ -74,6 +74,7 @@ class VoiceLoop(
     fun startCommand() {
         isCommand = true
         paused = false
+        stopped = false
         startListening()
     }
 
@@ -132,11 +133,17 @@ class VoiceLoop(
     }
 
     private fun listenIntent(): Intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        // Language mode Settings se live — restart nahi chahiye
+        val lang = context
+            .getSharedPreferences(MadSettings.PREFS, Context.MODE_PRIVATE)
+            .getString(MadSettings.KEY_LANG, "hinglish") ?: "hinglish"
+        val loc = if (lang == "english") "en-IN" else "hi-IN"
+
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, loc)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, loc)
         putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        // Long silence/length windows keep each session alive so the mic does
-        // not drop out during gaps in speech.
         putExtra("android.speech.extras.SPEECH_INPUT_COMPLETE_SILENCE_THRESHOLD_MILLIS", 10000)
         putExtra("android.speech.extras.SPEECH_INPUT_MINIMUM_LENGTH_MILLIS", 10000)
     }
