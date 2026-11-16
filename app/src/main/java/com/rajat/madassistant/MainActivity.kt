@@ -5,9 +5,11 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.text.InputType
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -21,8 +23,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var btnSelectTarget: Button
     private lateinit var btnStart: Button
-    private lateinit var etApiKey: EditText
-    private lateinit var btnSaveKey: Button
+    private lateinit var btnSettings: Button
     private lateinit var targetAppManager: TargetAppManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -31,23 +32,43 @@ class MainActivity : AppCompatActivity() {
         statusText = findViewById(R.id.statusText)
         btnSelectTarget = findViewById(R.id.btnSelectTarget)
         btnStart = findViewById(R.id.btnStart)
-        etApiKey = findViewById(R.id.etApiKey)
-        btnSaveKey = findViewById(R.id.btnSaveKey)
+        btnSettings = findViewById(R.id.btnSettings)
         targetAppManager = TargetAppManager(this)
 
-        etApiKey.setText(getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_API, ""))
-        btnSaveKey.setOnClickListener {
-            val key = etApiKey.text.toString().trim()
-            getSharedPreferences(PREFS, MODE_PRIVATE)
-                .edit()
-                .putString(KEY_API, key)
-                .apply()
-            statusText.setText(R.string.status_key_saved)
-        }
-
+        btnSettings.setOnClickListener { showSettingsDialog() }
         btnSelectTarget.setOnClickListener { showAppPicker() }
         btnStart.setOnClickListener { startAssistant() }
         updateTargetLabel()
+    }
+
+    /** API key / connection settings live here, off the main screen. */
+    private fun showSettingsDialog() {
+        val pad = (20 * resources.displayMetrics.density).toInt()
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, 0)
+        }
+        val input = EditText(this).apply {
+            hint = getString(R.string.api_key_hint)
+            setText(getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_API, ""))
+            inputType = InputType.TYPE_CLASS_TEXT
+            setSingleLine()
+        }
+        container.addView(input)
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.settings_title)
+            .setView(container)
+            .setPositiveButton(R.string.btn_save_key) { _, _ ->
+                val key = input.text.toString().trim()
+                getSharedPreferences(PREFS, MODE_PRIVATE)
+                    .edit()
+                    .putString(KEY_API, key)
+                    .apply()
+                statusText.setText(R.string.status_key_saved)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun showAppPicker() {
