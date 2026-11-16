@@ -2,7 +2,6 @@ package com.rajat.madassistant.speech
 
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -13,9 +12,10 @@ import android.speech.SpeechRecognizer
 /**
  * Always-on listening loop built on Android's built-in SpeechRecognizer.
  *
- * WAKE mode listens continuously until something is heard; the engine decides
- * if it contained the wake word. COMMAND mode captures a single user command.
- * The loop restarts itself on every error/result so it runs 24/7.
+ * The SAME recognizer instance is reused for every session, so the engine is
+ * created once and stays alive permanently until stop() is called. Sessions
+ * re-arm quickly after results/errors, and long silence windows keep the mic
+ * from switching off too soon in quiet surroundings.
  */
 class VoiceLoop(
     private val context: Context,
@@ -48,9 +48,9 @@ class VoiceLoop(
             if (stopped) return
             val delay = when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH,
-                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> 400L
-                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> 1500L
-                else -> 1000L
+                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> 250L
+                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> 800L
+                else -> 500L
             }
             restartAfter(delay)
         }
@@ -60,7 +60,7 @@ class VoiceLoop(
             val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             val text = list?.firstOrNull().orEmpty().trim()
             if (text.isNotEmpty()) onHeard(text)
-            restartAfter(400)
+            restartAfter(250)
         }
     }
 
@@ -80,7 +80,10 @@ class VoiceLoop(
     /** Pause listening (e.g. while the assistant is speaking, to avoid hearing itself). */
     fun pause() {
         paused = true
-        destroyRecognizer()
+        try {
+            recognizer?.stopListening()
+        } catch (_: Exception) {
+        }
     }
 
     fun stop() {
@@ -91,19 +94,22 @@ class VoiceLoop(
 
     private fun startListening() {
         if (paused || stopped) return
-        destroyRecognizer()
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
             main.postDelayed({ startListening() }, 5000)
             return
         }
-        recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { sr ->
-            sr.setRecognitionListener(listener)
+        val sr = recognizer ?: SpeechRecognizer.createSpeechRecognizer(context).also {
+            it.setRecognitionListener(listener)
+            recognizer = it
+        }
+        try {
             sr.startListening(listenIntent())
+        } catch (_: Exception) {
+            restartAfter(1000)
         }
     }
 
     private fun restartAfter(delay: Long) {
-        destroyRecognizer()
         main.postDelayed({ if (!paused && !stopped) startListening() }, delay)
     }
 
@@ -129,8 +135,9 @@ class VoiceLoop(
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        if (Build.VERSION.SDK_INT >= 23) {
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
-        }
+        // Long silence/length windows keep each session alive so the mic does
+        // not drop out during gaps in speech.
+        putExtra("android.speech.extras.SPEECH_INPUT_COMPLETE_SILENCE_THRESHOLD_MILLIS", 10000)
+        putExtra("android.speech.extras.SPEECH_INPUT_MINIMUM_LENGTH_MILLIS", 10000)
     }
 }
