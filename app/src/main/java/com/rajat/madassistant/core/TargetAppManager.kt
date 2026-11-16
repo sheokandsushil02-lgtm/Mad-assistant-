@@ -11,11 +11,16 @@ class TargetAppManager(private val context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    /** REMS Business app (the primary target MAD controls). */
     var targetPackage: String
-        get() = prefs.getString(KEY_TARGET_PACKAGE, null) ?: ""
+        get() = prefs.getString(KEY_TARGET_PACKAGE, null) ?: DEFAULT_TARGET_PACKAGE
         set(value) {
             prefs.edit().putString(KEY_TARGET_PACKAGE, value).apply()
         }
+
+    /** True when the saved package is the built-in REMS default. */
+    val isRemsTarget: Boolean
+        get() = targetPackage == DEFAULT_TARGET_PACKAGE
 
     fun getLaunchableApps(): List<AppInfo> {
         val pm = context.packageManager
@@ -42,5 +47,8 @@ class TargetAppManager(private val context: Context) {
     companion object {
         private const val PREFS_NAME = "mad_prefs"
         private const val KEY_TARGET_PACKAGE = "target_package"
+
+        /** REMS Business app package, from its manifest. */
+        const val DEFAULT_TARGET_PACKAGE = "com.aistudio.remsbusiness.kpxwza"
     }
 }
