@@ -5,10 +5,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.widget.ArrayAdapter
 import android.widget.Button
-import android.widget.ListView
+import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -22,6 +21,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var btnSelectTarget: Button
     private lateinit var btnStart: Button
+    private lateinit var etApiKey: EditText
+    private lateinit var btnSaveKey: Button
     private lateinit var targetAppManager: TargetAppManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -30,7 +31,19 @@ class MainActivity : AppCompatActivity() {
         statusText = findViewById(R.id.statusText)
         btnSelectTarget = findViewById(R.id.btnSelectTarget)
         btnStart = findViewById(R.id.btnStart)
+        etApiKey = findViewById(R.id.etApiKey)
+        btnSaveKey = findViewById(R.id.btnSaveKey)
         targetAppManager = TargetAppManager(this)
+
+        etApiKey.setText(getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_API, ""))
+        btnSaveKey.setOnClickListener {
+            val key = etApiKey.text.toString().trim()
+            getSharedPreferences(PREFS, MODE_PRIVATE)
+                .edit()
+                .putString(KEY_API, key)
+                .apply()
+            statusText.setText(R.string.status_key_saved)
+        }
 
         btnSelectTarget.setOnClickListener { showAppPicker() }
         btnStart.setOnClickListener { startAssistant() }
@@ -101,5 +114,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQ_PERMISSIONS = 1001
+        private const val PREFS = "mad_prefs"
+        private const val KEY_API = "gemini_api_key"
     }
 }
