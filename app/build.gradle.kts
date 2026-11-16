@@ -9,7 +9,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.rajat.madassistant"
+        applicationId = "com.rajat.madmemory"
         minSdk = 26
         targetSdk = 34
         versionCode = 6
