@@ -39,6 +39,7 @@ class AssistantEngine(private val context: Context) {
         tts.start()
         loop.startWake()
         runCatching { reminders.rescheduleAll() }
+        status("AI: ready")
     }
 
     fun stop() {
@@ -51,10 +52,10 @@ class AssistantEngine(private val context: Context) {
 
     fun reload() = tts.reload()
 
-    /** Manual mic/orb tap: skip wake word and capture the next phrase. */
+    /** Manual mic/orb tap: skip wake word and capture the next phrase — turant. */
     fun listenNow() {
         beep()
-        status("Listening... boliye")
+        status("AI: listening request...")
         loop.startCommand()
     }
 
@@ -94,23 +95,23 @@ class AssistantEngine(private val context: Context) {
         if (t.contains(wake) || t.contains("mad") || t.contains("मद") || t.contains("मैड") || t.contains("hey mate")) {
             loop.pause()
             beep()
+            status("AI: wake word detected")
             tts.speak(WAKE_REPLY) { loop.startCommand() }
         }
     }
 
     private suspend fun handleCommand(text: String) {
         loop.pause()
-        status("Heard: $text")
+        status("AI: heard \"$text\"")
         dao.addChat(ChatEntity(role = ROLE_USER, content = text))
-        status("Thinking...")
+        status("AI: thinking...")
         val reply = decide(text)
         dao.addChat(ChatEntity(role = ROLE_MAD, content = reply))
         showBubble(reply)
-        status("MAD: $reply")
+        status("AI: replied")
         if (prefs.getBoolean(MadSettings.KEY_TTS_ENABLED, true)) {
-            status("Speaking...")
             tts.speak(reply) {
-                status("Listening... say hey mad")
+                status(if (prefs.getBoolean(MadSettings.KEY_WAKE_ENABLED, true)) "AI: idle — say hey mad" else "AI: idle")
                 if (prefs.getBoolean(MadSettings.KEY_WAKE_ENABLED, true)) loop.startWake()
             }
         } else if (prefs.getBoolean(MadSettings.KEY_WAKE_ENABLED, true)) {
