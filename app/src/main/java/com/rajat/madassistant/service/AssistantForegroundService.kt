@@ -12,8 +12,11 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.rajat.madassistant.R
+import com.rajat.madassistant.core.AssistantEngine
 
 class AssistantForegroundService : Service() {
+
+    private var engine: AssistantEngine? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -24,13 +27,16 @@ class AssistantForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startInForeground()
-        // Step 2 hooks (not yet implemented):
-        //  - Vosk offline wake-word engine ("Hey Mad")
-        //  - SpeechRecognizer conversation loop
-        //  - TextToSpeech output
-        //  - Room memory access + Retrofit AI brain calls
-        //  - REMS bridge dispatch
+        if (engine == null) {
+            engine = AssistantEngine(this).also { it.start() }
+        }
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        engine?.stop()
+        engine = null
+        super.onDestroy()
     }
 
     private fun createNotificationChannel() {
