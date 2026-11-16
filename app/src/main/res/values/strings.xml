@@ -2,6 +2,7 @@
 <resources>
  <string name="app_name">MAD Memory</string>
     <string name="btn_start">Start Assistant</string>
+    <string name="btn_stop">Stop Assistant</string>
     <string name="btn_select_target">Select Target App</string>
     <string name="btn_target_selected">Target: %1$s</string>
     <string name="btn_save_key">Save</string>
