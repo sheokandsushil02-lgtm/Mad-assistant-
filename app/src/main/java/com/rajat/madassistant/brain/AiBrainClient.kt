@@ -9,6 +9,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
 /** Result of the Test Connection button. */
@@ -17,10 +20,21 @@ data class ConnectionTest(
     val message: String
 )
 
+/** Result of Fetch Available Models (Gemini). */
+data class ModelsFetch(
+    val ok: Boolean,
+    val models: List<String>,
+    val message: String
+)
+
 /**
  * Multi-provider AI brain: Gemini / OpenAI / Claude / Grok.
- * Provider + model dono user Settings me chunta hai.
- * Custom model naam bhi type kar sakta hai (naye/future models ke liye).
+ *
+ * Gemini-specific fixes:
+ *  - Model ID hamesha trim + lowercase (uppercase 404 deta hai).
+ *  - Naye "AQ." wale AI Studio keys header "x-goog-api-key" se jaate hain (URL encoding issue nahi).
+ *  - Timeouts 30/60/30 sec — thinking models der se jawab dete hain.
+ *  - Asli HTTP error dikhta hai, "Internet problem" sirf net fail par.
  */
 object AiBrainClient {
 
@@ -28,22 +42,21 @@ object AiBrainClient {
     private val JSON = "application/json; charset=utf-8".toMediaType()
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
     /** AI companies — Settings dropdown me dikhti hain. */
     val PROVIDERS = listOf("Gemini", "OpenAI", "Claude", "Grok")
 
-    /** Har company ke models. Custom option se koi bhi naam add ho sakta hai. */
+    /** Har company ke models (Gemini list updated — abhi active Google AI Studio models). */
     val MODELS: Map<String, List<String>> = mapOf(
         "Gemini" to listOf(
+            "gemini-flash-latest",
             "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
-            "gemini-2.5-pro",
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-            "gemini-flash-latest"
+            "gemini-2.5-pro"
         ),
         "OpenAI" to listOf(
             "gpt-4o",
@@ -74,6 +87,12 @@ object AiBrainClient {
 
     fun defaultModel(provider: String): String = modelsFor(provider).first()
 
+    /** BUGFIX #1: uppercase/jaada space wale model naam 404 dete hain. */
+    fun normalizeModel(model: String): String = model.trim().lowercase()
+
+    /** BUGFIX #2: key me extra space 400/403 de deta hai. */
+    fun normalizeKey(key: String): String = key.trim()
+
     private fun systemText(memoryContext: String): String =
         "You are MAD, a voice assistant for an Indian shop owner. " +
             "Reply in the same language the user speaks (Hindi/Hinglish/English). " +
@@ -81,24 +100,74 @@ object AiBrainClient {
             if (memoryContext.isNotBlank()) " Known facts about the user:\n$memoryContext" else ""
 
     /**
-     * Test Connection button ka backend — chuna hua provider+model asli call karke dekhta hai.
+     * Test Connection — chuna hua provider+model asli call karke dekhta hai.
+     * Errors ab asli wale dikhte hain (Internet problem sirf net fail par).
      */
     suspend fun testConnection(provider: String, apiKey: String, model: String): ConnectionTest =
         withContext(Dispatchers.IO) {
-            if (apiKey.isBlank()) {
+            val key = normalizeKey(apiKey)
+            val modelId = normalizeModel(model)
+            if (key.isBlank()) {
                 return@withContext ConnectionTest(false, "API key khaali hai")
             }
             try {
-                val reply = callApi(provider, apiKey, model, "Say OK", "")
+                val reply = callApi(provider, key, modelId, "Say OK", "")
                 if (reply.isBlank()) {
                     ConnectionTest(false, "AI ka jawab khaali aaya")
                 } else {
-                    ConnectionTest(true, "Connection OK ($model)")
+                    ConnectionTest(true, "Connection OK ($modelId)")
                 }
             } catch (e: Exception) {
-                ConnectionTest(false, classify(e))
+                ConnectionTest(false, readableError(e))
             }
         }
+
+    /**
+     * BUGFIX #1b: Gemini ki asli available models ki list laata hai
+     * (GET /v1beta/models) — jo models tumhari key sach me support karti hai.
+     */
+    suspend fun fetchGeminiModels(apiKey: String): ModelsFetch = withContext(Dispatchers.IO) {
+        val key = normalizeKey(apiKey)
+        if (key.isBlank()) {
+            return@withContext ModelsFetch(false, emptyList(), "API key khaali hai")
+        }
+        try {
+            val request = Request.Builder()
+                .url("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200")
+                .header("x-goog-api-key", key)
+                .get()
+                .build()
+            client.newCall(request).execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    throw RuntimeException("HTTP ${resp.code}: ${extractApiError(text)}")
+                }
+                val models = mutableListOf<String>()
+                runCatching {
+                    val array = JsonParser.parseString(text).asJsonObject
+                        .getAsJsonArray("models")
+                    for (i in 0 until array.size()) {
+                        val m = array.get(i).asJsonObject
+                        val name = m.get("name")?.asString ?: continue
+                        val methods = runCatching {
+                            m.getAsJsonArray("supportedGenerationMethods")
+                                .map { it.asString }
+                        }.getOrDefault(emptyList())
+                        if (methods.contains("generateContent") && name.startsWith("models/gemini")) {
+                            models.add(name.removePrefix("models/"))
+                        }
+                    }
+                }
+                if (models.isEmpty()) {
+                    ModelsFetch(false, emptyList(), "Koi generateContent model nahi mila is key par")
+                } else {
+                    ModelsFetch(true, models, "${models.size} models mile")
+                }
+            }
+        } catch (e: Exception) {
+            ModelsFetch(false, emptyList(), readableError(e))
+        }
+    }
 
     suspend fun ask(
         provider: String,
@@ -108,23 +177,37 @@ object AiBrainClient {
         memoryContext: String
     ): String = withContext(Dispatchers.IO) {
         try {
-            callApi(provider, apiKey, model, userText, memoryContext).ifBlank { FALLBACK }
+            callApi(provider, normalizeKey(apiKey), normalizeModel(model), userText, memoryContext)
+                .ifBlank { FALLBACK }
         } catch (_: Exception) {
             FALLBACK
         }
     }
 
-    private fun classify(e: Exception): String {
+    /**
+     * BUGFIX #3: "Internet problem" ab sirf net fail par.
+     * Timeout, HTTP 400/401/403/404 sab apna asli message dikhte hain.
+     */
+    private fun readableError(e: Exception): String {
         val raw = e.message ?: ""
+        val httpMatch = Regex("HTTP (\\d+): ([\\s\\S]*)").find(raw)
         return when {
-            raw.contains("401") || raw.contains("403") ||
-                raw.contains("API_KEY_INVALID", true) ||
-                raw.contains("invalid_api_key", true) -> "API key galat hai"
-            raw.contains("429") -> "Key ki limit khatam ho gayi (quota)"
-            raw.contains("404") || raw.contains("not_found", true) ->
-                "Ye model available nahi — dusra model chuno"
-            else -> "Internet/network problem"
+            e is UnknownHostException || e is ConnectException ->
+                "Internet problem — net/Wi-Fi check karo"
+            e is SocketTimeoutException ->
+                "Request timed out — model ne jawab dene me der ki (dobara try karo)"
+            httpMatch != null -> "Error ${httpMatch.groupValues[1]}: ${httpMatch.groupValues[2]}"
+            else -> raw.ifBlank { "Internet/network problem" }
         }
+    }
+
+    /** Google/OpenAI/Anthropic error body se exact message nikalta hai. */
+    private fun extractApiError(body: String): String {
+        val apiMsg = runCatching {
+            JsonParser.parseString(body).asJsonObject
+                .getAsJsonObject("error").get("message").asString
+        }.getOrNull()
+        return apiMsg ?: body.take(200)
     }
 
     private fun callApi(
@@ -149,13 +232,17 @@ object AiBrainClient {
         headers.forEach { (k, v) -> builder.header(k, v) }
         client.newCall(builder.build()).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code} $text")
+            if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}: ${extractApiError(text)}")
             return text
         }
     }
 
-    /** Gemini (generativelanguage API). */
+    /**
+     * Gemini — naye "AQ." keys header se jaate hain (x-goog-api-key),
+     * model ID lowercase + trim karke URL me jaata hai.
+     */
     private fun geminiStyle(apiKey: String, model: String, system: String, userText: String): String {
+        val modelId = normalizeModel(model)
         val userContent = JsonObject().apply {
             add("parts", JsonArray().apply { add(JsonObject().apply { addProperty("text", userText) }) })
         }
@@ -166,8 +253,8 @@ object AiBrainClient {
             add("contents", JsonArray().apply { add(userContent) })
             add("systemInstruction", systemContent)
         }
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
-        val raw = httpPost(url, body.toString())
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$modelId:generateContent"
+        val raw = httpPost(url, body.toString(), mapOf("x-goog-api-key" to normalizeKey(apiKey)))
         return runCatching {
             JsonParser.parseString(raw).asJsonObject
                 .getAsJsonArray("candidates").get(0).asJsonObject
@@ -184,11 +271,11 @@ object AiBrainClient {
             add(JsonObject().apply { addProperty("role", "user"); addProperty("content", userText) })
         }
         val body = JsonObject().apply {
-            addProperty("model", model)
+            addProperty("model", normalizeModel(model))
             add("messages", messages)
             addProperty("max_tokens", 200)
         }
-        val raw = httpPost(baseUrl, body.toString(), mapOf("Authorization" to "Bearer $apiKey"))
+        val raw = httpPost(baseUrl, body.toString(), mapOf("Authorization" to "Bearer ${normalizeKey(apiKey)}"))
         return runCatching {
             JsonParser.parseString(raw).asJsonObject
                 .getAsJsonArray("choices").get(0).asJsonObject
@@ -199,7 +286,7 @@ object AiBrainClient {
     /** Claude (Anthropic messages API). */
     private fun anthropicStyle(apiKey: String, model: String, system: String, userText: String): String {
         val body = JsonObject().apply {
-            addProperty("model", model)
+            addProperty("model", model.trim().lowercase())
             addProperty("max_tokens", 200)
             addProperty("system", system)
             add("messages", JsonArray().apply {
@@ -210,7 +297,7 @@ object AiBrainClient {
             "https://api.anthropic.com/v1/messages",
             body.toString(),
             mapOf(
-                "x-api-key" to apiKey,
+                "x-api-key" to normalizeKey(apiKey),
                 "anthropic-version" to "2023-06-01"
             )
         )
