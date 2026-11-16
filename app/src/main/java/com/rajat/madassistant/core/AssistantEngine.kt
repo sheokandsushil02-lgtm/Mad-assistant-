@@ -6,8 +6,11 @@ import com.rajat.madassistant.brain.AiBrainClient
 import com.rajat.madassistant.data.ChatEntity
 import com.rajat.madassistant.data.FactEntity
 import com.rajat.madassistant.data.MemoryDb
+import com.rajat.madassistant.skill.PhoneSkills
+import com.rajat.madassistant.skill.ReminderManager
 import com.rajat.madassistant.speech.TtsSpeaker
 import com.rajat.madassistant.speech.VoiceLoop
+import com.rajat.madassistant.ui.OverlayBubble
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -16,8 +19,9 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 
 /**
- * The orchestrator: wake word -> listen -> decide -> speak.
- * Offline skills: remember/recall facts, open target app.
+ * The orchestrator: wake word -> listen -> decide -> speak (+ show bubble).
+ * Offline skills: remember/recall facts, open apps, WhatsApp/call/browser/email,
+ * time/date, reminders.
  * Online skill: full AI conversation via Gemini (needs API key).
  */
 class AssistantEngine(private val context: Context) {
@@ -28,10 +32,14 @@ class AssistantEngine(private val context: Context) {
     private val targetManager = TargetAppManager(context)
     private val tts = TtsSpeaker(context)
     private val loop = VoiceLoop(context) { heard -> scope.launch { onHeard(heard) } }
+    private val phoneSkills = PhoneSkills(context)
+    private val reminders = ReminderManager(context)
 
     fun start() {
         tts.start()
         loop.startWake()
+        // Re-schedule any reminders that survived a reboot
+        runCatching { reminders.rescheduleAll() }
     }
 
     fun stop() {
@@ -57,14 +65,25 @@ class AssistantEngine(private val context: Context) {
         dao.addChat(ChatEntity(role = ROLE_USER, content = text))
         val reply = decide(text)
         dao.addChat(ChatEntity(role = ROLE_MAD, content = reply))
+        showBubble(reply)
         tts.speak(reply) { loop.startWake() }
+    }
+
+    private fun showBubble(reply: String) {
+        runCatching { OverlayBubble.show(context, reply) }
     }
 
     private suspend fun decide(text: String): String {
         val t = text.lowercase(Locale.getDefault())
         return when {
+            // Memory skills
             t.contains("याद रख") || t.contains("remember") -> remember(text)
             t.contains("क्या याद") || t.contains("याद है") || t.contains("what do you remember") -> recall()
+            // Reminder skill (before खोल/open so "yaad dilana" isn't caught by app-open)
+            reminders.handle(text) != null -> reminders.handle(text)!!
+            // Phone skills: WhatsApp/call/browser/email/time/date/open apps
+            phoneSkills.handle(text) != null -> phoneSkills.handle(text)!!
+            // Target app (REMS) shortcut
             t.contains("खोल") || (t.contains("open") && (t.contains("app") || t.contains("target"))) ->
                 openTargetApp()
             else -> askBrain(text)
@@ -123,8 +142,9 @@ class AssistantEngine(private val context: Context) {
         return if (key.isNotBlank()) {
             AiBrainClient.ask(key, text, facts)
         } else {
-            "अभी मैं सिर्फ याद रखना और app खोलना जानता हूँ। " +
-                "पूरे जवाब के लिए app में Gemini API key डालिए।"
+            "अभी मैं ये काम कर सकता हूँ: WhatsApp या कोई भी app खोलना, call करना, " +
+                "browser और email खोलना, time और date बताना, reminder लगाना, और याद रखना। " +
+                "पूरी बातचीत के लिए app में Gemini API key डालिए।"
         }
     }
 
