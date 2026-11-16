@@ -36,6 +36,9 @@ class MainActivity : AppCompatActivity() {
     private var selectedProvider: String = AiBrainClient.defaultProvider()
     private var selectedModel: String = AiBrainClient.defaultModel(AiBrainClient.defaultProvider())
 
+    /** Fetch Available Models se aayi list (key-supported models). */
+    private var fetchedModels: List<String> = emptyList()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -106,7 +109,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Settings: AI company + API key + model + Test Connection — sab ek jagah. */
+    /** Settings: AI company + API key + model + Fetch + Test — sab ek jagah. */
     private fun showSettingsDialog() {
         val pad = (12 * resources.displayMetrics.density).toInt()
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
@@ -116,30 +119,44 @@ class MainActivity : AppCompatActivity() {
             .ifBlank { AiBrainClient.defaultProvider() }
         selectedModel = prefs.getString(KEY_MODEL, "").orEmpty()
             .ifBlank { AiBrainClient.defaultModel(selectedProvider) }
+        fetchedModels = emptyList()
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad, pad, 0)
         }
 
-        // --- Model button pehle banao (provider button isi ko update karta hai) ---
+        // --- Model button pehle banao ---
         val modelButton = Button(this).apply {
             text = "🤖  $selectedModel"
         }
         modelButton.setOnClickListener {
-            val models = AiBrainClient.modelsFor(selectedProvider).toMutableList()
-            models.add("✏️  Custom model (type karo)")
-            showPicker("Model chuno ($selectedProvider)", models.toTypedArray(), selectedModel) { picked ->
-                if (picked.startsWith("✏️")) {
-                    askCustomModel { custom ->
-                        if (custom.isNotBlank()) {
-                            selectedModel = custom
-                            modelButton.text = "🤖  $selectedModel"
+            val models = if (fetchedModels.isNotEmpty()) {
+                fetchedModels
+            } else {
+                AiBrainClient.modelsFor(selectedProvider)
+            }
+            val display = models.toMutableList()
+            display.add("✏️  Custom model (type karo)")
+            display.add("🔄  Fetch from server (Gemini key se)")
+            showPicker("Model chuno ($selectedProvider)", display.toTypedArray(), selectedModel) { picked ->
+                when {
+                    picked.startsWith("✏️") -> {
+                        askCustomModel { custom ->
+                            if (custom.isNotBlank()) {
+                                selectedModel = custom
+                                modelButton.text = "🤖  $selectedModel"
+                            }
                         }
                     }
-                } else {
-                    selectedModel = picked
-                    modelButton.text = "🤖  $selectedModel"
+                    picked.startsWith("🔄") -> {
+                        // fetch yahan nahi hota — Fetch button use karo (neeche)
+                        testStatus.text = "🔽 'Fetch Available Models' button dabao"
+                    }
+                    else -> {
+                        selectedModel = picked
+                        modelButton.text = "🤖  $selectedModel"
+                    }
                 }
             }
         }
@@ -156,13 +173,14 @@ class MainActivity : AppCompatActivity() {
             showPicker("AI Company chuno", AiBrainClient.PROVIDERS.toTypedArray(), selectedProvider) { picked ->
                 selectedProvider = picked
                 selectedModel = AiBrainClient.defaultModel(picked)
+                fetchedModels = emptyList()
                 providerButton.text = "🏢  $selectedProvider"
                 modelButton.text = "🤖  $selectedModel"
             }
         }
 
         val input = EditText(this).apply {
-            hint = "API key"
+            hint = "API key (spaces hat jaayengi khud)"
             setText(prefs.getString(KEY_API, ""))
             inputType = InputType.TYPE_CLASS_TEXT
             setSingleLine()
@@ -174,22 +192,50 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, pad, 0, 0)
         }
 
-        // --- UI order me views add karo ---
+        // --- Test result line ---
+        val testStatus = TextView(this).apply {
+            text = ""
+            setTextColor(Color.parseColor("#B58900"))
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setPadding(0, pad / 2, 0, pad / 2)
+        }
+
+        // --- UI order ---
         container.addView(providerLabel)
         container.addView(providerButton)
         container.addView(input)
         container.addView(modelLabel)
         container.addView(modelButton)
 
-        // --- Test result line ---
-        val testStatus = TextView(this).apply {
-            text = ""
-            setTextColor(Color.parseColor("#B58900"))
-            textSize = 14f
-            gravity = Gravity.CENTER
-            setPadding(0, pad, 0, pad)
+        // --- Fetch Available Models button ---
+        val btnFetch = Button(this).apply {
+            text = "🔄 Fetch Available Models"
         }
-        container.addView(testStatus)
+        btnFetch.setOnClickListener {
+            val key = input.text.toString().trim()
+            if (key.isBlank()) {
+                testStatus.text = "🔴 API key khaali hai"
+                testStatus.setTextColor(Color.RED)
+                return@setOnClickListener
+            }
+            testStatus.text = "⏳ Models aa rahi hain…"
+            testStatus.setTextColor(Color.parseColor("#B58900"))
+            btnFetch.isEnabled = false
+            CoroutineScope(Dispatchers.Main).launch {
+                val result = AiBrainClient.fetchGeminiModels(key)
+                btnFetch.isEnabled = true
+                if (result.ok) {
+                    fetchedModels = result.models
+                    testStatus.text = "🟢 ${result.message} — ab Model button dabao, asli list khulegi"
+                    testStatus.setTextColor(Color.parseColor("#0A8F2E"))
+                } else {
+                    testStatus.text = "🔴 ${result.message}"
+                    testStatus.setTextColor(Color.RED)
+                }
+            }
+        }
+        container.addView(btnFetch)
 
         // --- Test Connection button ---
         val btnTest = Button(this).apply {
@@ -202,7 +248,7 @@ class MainActivity : AppCompatActivity() {
                 testStatus.setTextColor(Color.RED)
                 return@setOnClickListener
             }
-            testStatus.text = "⏳ Testing…"
+            testStatus.text = "⏳ Testing… (thinking models ko 20-25 sec lag sakte hain)"
             testStatus.setTextColor(Color.parseColor("#B58900"))
             btnTest.isEnabled = false
             CoroutineScope(Dispatchers.Main).launch {
@@ -218,6 +264,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         container.addView(btnTest)
+        container.addView(testStatus)
 
         AlertDialog.Builder(this)
             .setTitle(R.string.settings_title)
@@ -226,7 +273,7 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit()
                     .putString(KEY_API, input.text.toString().trim())
                     .putString(KEY_PROVIDER, selectedProvider)
-                    .putString(KEY_MODEL, selectedModel)
+                    .putString(KEY_MODEL, AiBrainClient.normalizeModel(selectedModel))
                     .apply()
                 statusText.setText(R.string.status_key_saved)
             }
@@ -234,7 +281,7 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** Custom model naam poochho (future models — jaise 3.8 — ke liye). */
+    /** Custom model naam poochho (future models ke liye). */
     private fun askCustomModel(onDone: (String) -> Unit) {
         val box = EditText(this).apply {
             hint = "Model ka exact naam type karo"
