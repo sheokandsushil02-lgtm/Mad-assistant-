@@ -65,6 +65,12 @@ class AssistantEngine(private val context: Context) {
         loop.startCommand()
     }
 
+    /** Floating orb chat bubble se aaya text command — STT skip, seedha brain. */
+    fun handleText(text: String) {
+        if (text.isBlank()) return
+        scope.launch { handleCommand(text) }
+    }
+
     /** Test Voice button — current voice/pitch/speed me sample. */
     fun testVoice() {
         val name = if (prefs.getString(MadSettings.KEY_VOICE_GENDER, "system") == "female")
@@ -127,7 +133,7 @@ class AssistantEngine(private val context: Context) {
     private suspend fun decide(text: String): String {
         val t = text.lowercase(Locale.getDefault())
         return when {
-            t.contains("याद रख") || t.contains("remember") -> remember(text)
+            t.contains("याद रख") || tcontains("remember") -> remember(text)
             t.contains("क्या याद") || t.contains("याद है") || t.contains("what do you remember") -> recall()
             reminders.handle(text) != null -> reminders.handle(text)!!
             phoneSkills.handle(text) != null -> phoneSkills.handle(text)!!
