@@ -246,8 +246,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
-        private const val REQ_PERMISSIONMS = 1001
-        private const val REQ_PERMISSIONS = REQ_PERMISSIONMS
+        private const val REQ_PERMISSIONS = 1001
         private const val PREFS = "mad_prefs"
         private const val KEY_API = "gemini_api_key"
         private const val KEY_MODEL = "gemini_model"
