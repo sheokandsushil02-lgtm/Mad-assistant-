@@ -11,7 +11,7 @@ import java.util.Locale
  * Speaks text aloud using Android's built-in TextToSpeech engine.
  * Prefers Hindi (hi-IN) voice and falls back to US English if unavailable.
  */
-class TtsSpeaker(context: Context) {
+class TtsSpeaker(private val context: Context) {
 
     private var tts: TextToSpeech? = null
     private var ready = false
