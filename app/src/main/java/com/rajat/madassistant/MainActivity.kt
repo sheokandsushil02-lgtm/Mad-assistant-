@@ -126,26 +126,25 @@ class MainActivity : AppCompatActivity() {
         val providerLabel = TextView(this).apply {
             text = "AI Company (tap to change)"
             textSize = 12f
-            setPadding(0, 0, 0, 0)
         }
         container.addView(providerLabel)
 
         val providerButton = Button(this).apply {
             text = "🏢  $selectedProvider"
-            setOnClickListener {
-                showPicker("AI Company chuno", AiBrainClient.PROVIDERS, selectedProvider) { picked ->
-                    selectedProvider = picked
-                    selectedModel = AiBrainClient.defaultModel(picked)
-                    providerButton.text = "🏢  $selectedProvider"
-                    modelButton.text = "🤖  $selectedModel"
-                }
+        }
+        providerButton.setOnClickListener {
+            showPicker("AI Company chuno", AiBrainClient.PROVIDERS.toTypedArray(), selectedProvider) { picked ->
+                selectedProvider = picked
+                selectedModel = AiBrainClient.defaultModel(picked)
+                providerButton.text = "🏢  $selectedProvider"
+                modelButton.text = "🤖  $selectedModel"
             }
         }
         container.addView(providerButton)
 
         // --- API key ---
         val input = EditText(this).apply {
-            hint = "API key ($selectedProvider)"
+            hint = "API key"
             setText(prefs.getString(KEY_API, ""))
             inputType = InputType.TYPE_CLASS_TEXT
             setSingleLine()
@@ -162,21 +161,21 @@ class MainActivity : AppCompatActivity() {
 
         val modelButton = Button(this).apply {
             text = "🤖  $selectedModel"
-            setOnClickListener {
-                val models = AiBrainClient.modelsFor(selectedProvider).toMutableList()
-                models.add("✏️  Custom model (type karo)")
-                showPicker("Model chuno ($selectedProvider)", models.toTypedArray(), selectedModel) { picked ->
-                    if (picked.startsWith("✏️")) {
-                        askCustomModel { custom ->
-                            if (custom.isNotBlank()) {
-                                selectedModel = custom
-                                modelButton.text = "🤖  $selectedModel"
-                            }
+        }
+        modelButton.setOnClickListener {
+            val models = AiBrainClient.modelsFor(selectedProvider).toMutableList()
+            models.add("✏️  Custom model (type karo)")
+            showPicker("Model chuno ($selectedProvider)", models.toTypedArray(), selectedModel) { picked ->
+                if (picked.startsWith("✏️")) {
+                    askCustomModel { custom ->
+                        if (custom.isNotBlank()) {
+                            selectedModel = custom
+                            modelButton.text = "🤖  $selectedModel"
                         }
-                    } else {
-                        selectedModel = picked
-                        modelButton.text = "🤖  $selectedModel"
                     }
+                } else {
+                    selectedModel = picked
+                    modelButton.text = "🤖  $selectedModel"
                 }
             }
         }
@@ -195,27 +194,27 @@ class MainActivity : AppCompatActivity() {
         // --- Test Connection button ---
         val btnTest = Button(this).apply {
             text = "Test Connection"
-            setOnClickListener {
-                val key = input.text.toString().trim()
-                if (key.isBlank()) {
-                    testStatus.text = "🔴 API key khaali hai"
+        }
+        btnTest.setOnClickListener {
+            val key = input.text.toString().trim()
+            if (key.isBlank()) {
+                testStatus.text = "🔴 API key khaali hai"
+                testStatus.setTextColor(Color.RED)
+                return@setOnClickListener
+            }
+            testStatus.text = "⏳ Testing…"
+            testStatus.setTextColor(Color.parseColor("#B58900"))
+            btnTest.isEnabled = false
+            CoroutineScope(Dispatchers.Main).launch {
+                val result = AiBrainClient.testConnection(selectedProvider, key, selectedModel)
+                if (result.ok) {
+                    testStatus.text = "🟢 ${result.message}"
+                    testStatus.setTextColor(Color.parseColor("#0A8F2E"))
+                } else {
+                    testStatus.text = "🔴 ${result.message}"
                     testStatus.setTextColor(Color.RED)
-                    return@setOnClickListener
                 }
-                testStatus.text = "⏳ Testing…"
-                testStatus.setTextColor(Color.parseColor("#B58900"))
-                isEnabled = false
-                CoroutineScope(Dispatchers.Main).launch {
-                    val result = AiBrainClient.testConnection(selectedProvider, key, selectedModel)
-                    if (result.ok) {
-                        testStatus.text = "🟢 ${result.message}"
-                        testStatus.setTextColor(Color.parseColor("#0A8F2E"))
-                    } else {
-                        testStatus.text = "🔴 ${result.message}"
-                        testStatus.setTextColor(Color.RED)
-                    }
-                    isEnabled = true
-                }
+                btnTest.isEnabled = true
             }
         }
         container.addView(btnTest)
@@ -274,7 +273,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val labels = apps.map { "${it.label}  (${it.packageName})" }
-        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, lists(apps, labels))
+        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, labels)
         AlertDialog.Builder(this)
             .setTitle(R.string.select_target_title)
             .setAdapter(adapter) { _, which ->
@@ -283,10 +282,6 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
-    }
-
-    private fun lists(apps: List<com.rajat.madassistant.core.LaunchableApp>, labels: List<String>): List<String> {
-        return labels
     }
 
     private fun updateTargetLabel() {
