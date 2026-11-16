@@ -11,10 +11,17 @@ import com.rajat.madassistant.service.AssistantForegroundService
 class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        val action = intent.action ?: return
+        val valid = action == Intent.ACTION_BOOT_COMPLETED ||
+                action == Intent.ACTION_MY_PACKAGE_REPLACED ||
+                action == "android.intent.action.QUICKBOOT_POWERON" ||
+                action == "com.htc.intent.action.QUICKBOOT_POWERON"
+        if (!valid) return
+
         val micGranted = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
                 PackageManager.PERMISSION_GRANTED
         if (!micGranted) return
+
         ContextCompat.startForegroundService(
             context,
             Intent(context, AssistantForegroundService::class.java)
