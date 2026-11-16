@@ -23,12 +23,14 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 
 /**
  * Jarvis-style floating orb HUD.
  *  - Pulsing glow jab listening/speaking ho
  *  - Single tap  : turant command sunne lagta hai (wake word ki zaroorat nahi)
  *  - Long press  : mini chat bubble — last command, AI reply, text input box
+ *  - Drag        : kahin bhi le jao
  */
 class FloatingOverlayService : Service() {
 
@@ -55,7 +57,11 @@ class FloatingOverlayService : Service() {
         super.onCreate()
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         runCatching {
-            registerReceiver(statusReceiver, IntentFilter("com.rajat.madassistant.STATUS"))
+            ContextCompat.registerReceiver(
+                this, statusReceiver,
+                IntentFilter("com.rajat.madassistant.STATUS"),
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
         }
     }
 
@@ -65,7 +71,7 @@ class FloatingOverlayService : Service() {
             return START_NOT_STICKY
         }
         if (orb == null) showOrb()
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onDestroy() {
@@ -162,7 +168,6 @@ class FloatingOverlayService : Service() {
 
         runCatching { wm.addView(view, params) }
         orb = view
-        main.post(pulse)
     }
 
     private fun overlayType(): Int =
@@ -246,7 +251,7 @@ class FloatingOverlayService : Service() {
     private fun sendToBrain(q: String) {
         val i = Intent(this, AssistantForegroundService::class.java)
             .setAction(AssistantForegroundService.ACTION_TEXT_COMMAND)
-            .putExtra("text", q)
+            .putExtra(AssistantForegroundService.EXTRA_TEXT, q)
         startService(i)
     }
 
