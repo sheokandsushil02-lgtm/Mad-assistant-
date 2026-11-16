@@ -1,23 +1,40 @@
 package com.rajat.madassistant.bridge
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Intent
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import com.rajat.madassistant.core.TargetAppManager
 
 class RemsBridgeAccessibilityService : AccessibilityService() {
 
+    private var targetPackage: String = ""
+
     override fun onServiceConnected() {
         super.onServiceConnected()
-        Log.i(TAG, "REMS bridge connected")
+        targetPackage = TargetAppManager(this).targetPackage
+        Log.i(TAG, "Bridge connected. Target app: $targetPackage")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Step 2: monitor REMS Business windows, find views by ID, and perform
-        // automated ledger/inventory actions (add transactions, item lists, etc.)
+        if (event == null) return
+        if (targetPackage.isEmpty()) {
+            targetPackage = TargetAppManager(this).targetPackage
+        }
+        val pkg = event.packageName?.toString() ?: return
+        if (targetPackage.isNotEmpty() && pkg != targetPackage) {
+            return
+        }
     }
 
     override fun onInterrupt() {
-        // No-op for skeleton
+    }
+
+    fun openTargetApp() {
+        if (targetPackage.isEmpty()) return
+        val launch = packageManager.getLaunchIntentForPackage(targetPackage) ?: return
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(launch)
     }
 
     companion object {
