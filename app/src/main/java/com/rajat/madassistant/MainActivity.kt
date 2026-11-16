@@ -122,43 +122,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(pad, pad, pad, 0)
         }
 
-        // --- AI Company picker ---
-        val providerLabel = TextView(this).apply {
-            text = "AI Company (tap to change)"
-            textSize = 12f
-        }
-        container.addView(providerLabel)
-
-        val providerButton = Button(this).apply {
-            text = "🏢  $selectedProvider"
-        }
-        providerButton.setOnClickListener {
-            showPicker("AI Company chuno", AiBrainClient.PROVIDERS.toTypedArray(), selectedProvider) { picked ->
-                selectedProvider = picked
-                selectedModel = AiBrainClient.defaultModel(picked)
-                providerButton.text = "🏢  $selectedProvider"
-                modelButton.text = "🤖  $selectedModel"
-            }
-        }
-        container.addView(providerButton)
-
-        // --- API key ---
-        val input = EditText(this).apply {
-            hint = "API key"
-            setText(prefs.getString(KEY_API, ""))
-            inputType = InputType.TYPE_CLASS_TEXT
-            setSingleLine()
-        }
-        container.addView(input)
-
-        // --- Model picker + custom model ---
-        val modelLabel = TextView(this).apply {
-            text = "AI Model (tap to change)"
-            textSize = 12f
-            setPadding(0, pad, 0, 0)
-        }
-        container.addView(modelLabel)
-
+        // --- Model button pehle banao (provider button isi ko update karta hai) ---
         val modelButton = Button(this).apply {
             text = "🤖  $selectedModel"
         }
@@ -179,6 +143,42 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+
+        // --- AI Company picker ---
+        val providerLabel = TextView(this).apply {
+            text = "AI Company (tap to change)"
+            textSize = 12f
+        }
+        val providerButton = Button(this).apply {
+            text = "🏢  $selectedProvider"
+        }
+        providerButton.setOnClickListener {
+            showPicker("AI Company chuno", AiBrainClient.PROVIDERS.toTypedArray(), selectedProvider) { picked ->
+                selectedProvider = picked
+                selectedModel = AiBrainClient.defaultModel(picked)
+                providerButton.text = "🏢  $selectedProvider"
+                modelButton.text = "🤖  $selectedModel"
+            }
+        }
+
+        val input = EditText(this).apply {
+            hint = "API key"
+            setText(prefs.getString(KEY_API, ""))
+            inputType = InputType.TYPE_CLASS_TEXT
+            setSingleLine()
+        }
+
+        val modelLabel = TextView(this).apply {
+            text = "AI Model (tap to change)"
+            textSize = 12f
+            setPadding(0, pad, 0, 0)
+        }
+
+        // --- UI order me views add karo ---
+        container.addView(providerLabel)
+        container.addView(providerButton)
+        container.addView(input)
+        container.addView(modelLabel)
         container.addView(modelButton)
 
         // --- Test result line ---
