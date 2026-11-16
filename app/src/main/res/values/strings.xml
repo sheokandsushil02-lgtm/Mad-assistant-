@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">MAD Assistant</string>
+ <string name="app_name">MAD Memory</string>
     <string name="btn_start">Start Assistant</string>
     <string name="btn_select_target">Select Target App</string>
     <string name="btn_target_selected">Target: %1$s</string>
