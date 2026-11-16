@@ -43,8 +43,63 @@ class MainActivity : AppCompatActivity() {
 
         btnSettings.setOnClickListener { showSettingsDialog() }
         btnSelectTarget.setOnClickListener { showAppPicker() }
-        btnStart.setOnClickListener { startAssistant() }
+        btnStart.setOnClickListener { toggleAssistant() }
         updateTargetLabel()
+        refreshRunState()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshRunState()
+    }
+
+    /** Start/Stop toggle: chal raha hai to band karo, band hai to chalu karo. */
+    private fun toggleAssistant() {
+        if (AssistantForegroundService.isRunning) {
+            stopAssistant()
+        } else {
+            startAssistant()
+        }
+    }
+
+    private fun stopAssistant() {
+        stopService(Intent(this, AssistantForegroundService::class.java))
+        statusText.setText(R.string.status_idle)
+        refreshRunState()
+    }
+
+    private fun startAssistant() {
+        val needed = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            needed.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
+        ) {
+            needed.add(Manifest.permission.RECORD_AUDIO)
+        }
+
+        if (needed.isNotEmpty()) {
+            statusText.setText(R.string.status_permission_needed)
+            ActivityCompat.requestPermissions(this, needed.toTypedArray(), REQ_PERMISSIONS)
+            return
+        }
+
+        ContextCompat.startForegroundService(this, Intent(this, AssistantForegroundService::class.java))
+        statusText.setText(R.string.status_listening)
+        refreshRunState()
+    }
+
+    /** Button aur text ko assistant ke hisaab se update karo. */
+    private fun refreshRunState() {
+        if (AssistantForegroundService.isRunning) {
+            btnStart.setText(R.string.btn_stop)
+            btnStart.setBackgroundColor(Color.parseColor("#B3261E"))
+        } else {
+            btnStart.setText(R.string.btn_start)
+            btnStart.setBackgroundColor(Color.parseColor("#1D6F42"))
+        }
     }
 
     /** API key / Test Connection settings live here, off the main screen. */
@@ -143,28 +198,6 @@ class MainActivity : AppCompatActivity() {
             btnSelectTarget.text = getString(R.string.btn_target_selected, targetAppManager.labelFor(pkg))
             btnStart.isEnabled = true
         }
-    }
-
-    private fun startAssistant() {
-        val needed = mutableListOf<String>()
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            needed.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
-        ) {
-            needed.add(Manifest.permission.RECORD_AUDIO)
-        }
-
-        if (needed.isNotEmpty()) {
-            statusText.setText(R.string.status_permission_needed)
-            ActivityCompat.requestPermissions(this, needed.toTypedArray(), REQ_PERMISSIONS)
-            return
-        }
-
-        ContextCompat.startForegroundService(this, Intent(this, AssistantForegroundService::class.java))
-        statusText.setText(R.string.status_listening)
     }
 
     override fun onRequestPermissionsResult(
