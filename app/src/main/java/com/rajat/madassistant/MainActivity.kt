@@ -41,6 +41,9 @@ import kotlinx.coroutines.launch
 class MainActivity : AppCompatActivity() {
 
     private lateinit var statusText: TextView
+    private lateinit var micStatus: TextView
+    private lateinit var aiStatus: TextView
+    private lateinit var ttsStatus: TextView
     private lateinit var btnSelectTarget: Button
     private lateinit var btnStart: Button
     private lateinit var btnMic: Button
@@ -51,11 +54,25 @@ class MainActivity : AppCompatActivity() {
     private var selectedModel: String = AiBrainClient.defaultModel(AiBrainClient.defaultProvider())
     private var fetchedModels: List<String> = emptyList()
 
-    /** Live status receiver — engine yahi se live "Heard:..." bhejta hai. */
+    /** Live status receiver — engine yahi se live Mic/AI/TTS + "Heard:..." bhejta hai. */
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
             val text = i?.getStringExtra(MadEvents.EXTRA_TEXT) ?: return
-            runOnUiThread { statusText.text = text }
+            runOnUiThread { updateStatus(text) }
+        }
+    }
+
+    /** "Mic: ...", "AI: ...", "TTS: ..." lines ko apne-apne debug rows me daalta hai. */
+    private fun updateStatus(text: String) {
+        when {
+            text.startsWith("Mic:") -> micStatus.text = text
+            text.startsWith("AI:") -> aiStatus.text = text
+            text.startsWith("TTS:") -> ttsStatus.text = text
+            text.startsWith("Heard:") -> {
+                aiStatus.text = "AI: ${text.removePrefix("Heard:").trim()}"
+                micStatus.text = "Mic: idle (paused)"
+            }
+            else -> statusText.text = text
         }
     }
 
@@ -63,6 +80,9 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         statusText = findViewById(R.id.statusText)
+        micStatus = findViewById(R.id.micStatus)
+        aiStatus = findViewById(R.id.aiStatus)
+        ttsStatus = findViewById(R.id.ttsStatus)
         btnSelectTarget = findViewById(R.id.btnSelectTarget)
         btnStart = findViewById(R.id.btnStart)
         btnMic = findViewById(R.id.btnMic)
@@ -74,6 +94,7 @@ class MainActivity : AppCompatActivity() {
         btnStart.setOnClickListener { toggleAssistant() }
         btnMic.setOnClickListener {
             if (AssistantForegroundService.isRunning) {
+                micStatus.text = "Mic: launching command session..."
                 startService(
                     Intent(this, AssistantForegroundService::class.java)
                         .setAction(AssistantForegroundService.ACTION_LISTEN_NOW)
@@ -109,6 +130,9 @@ class MainActivity : AppCompatActivity() {
     private fun stopAssistant() {
         stopService(Intent(this, AssistantForegroundService::class.java))
         statusText.setText(R.string.status_idle)
+        micStatus.text = "Mic: idle (stopped)"
+        aiStatus.text = "AI: stopped"
+        ttsStatus.text = "TTS: stopped"
         refreshRunState()
     }
 
@@ -127,6 +151,9 @@ class MainActivity : AppCompatActivity() {
         }
         ContextCompat.startForegroundService(this, Intent(this, AssistantForegroundService::class.java))
         statusText.setText(R.string.status_listening)
+        micStatus.text = "Mic: starting..."
+        aiStatus.text = "AI: starting..."
+        ttsStatus.text = "TTS: starting..."
         refreshRunState()
     }
 
@@ -264,7 +291,14 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(genderButton)
 
-        root.addView(hint("Pitch (0.7 - 1.4)"))
+        // Engine voice dropdown — Google TTS ke available hi-IN/en-IN voices
+        val voiceButton = Button(this).apply {
+            text = "Engine Voice: " + ((prefs.getString(MadSettings.KEY_VOICE_NAME, "") ?: "").ifBlank { "Auto (best)" })
+        }
+        voiceButton.setOnClickListener { showVoicePicker(prefs, voiceButton) }
+        root.addView(voiceButton)
+
+        root.addView(hint("Pitch (0.7 - 1.4, default 1.0)"))
         val pitchBar = SeekBar(this)
         pitchBar.max = 70
         pitchBar.progress = (((prefs.getString(MadSettings.KEY_PITCH, "1.0") ?: "1.0").toFloatOrNull() ?: 1f) * 100 - 70).toInt()
@@ -277,10 +311,10 @@ class MainActivity : AppCompatActivity() {
         })
         root.addView(pitchBar)
 
-        root.addView(hint("Speed (0.7 - 1.5)"))
+        root.addView(hint("Speed (0.7 - 1.5, default 0.95)"))
         val rateBar = SeekBar(this)
         rateBar.max = 80
-        rateBar.progress = (((prefs.getString(MadSettings.KEY_RATE, "1.0") ?: "1.0").toFloatOrNull() ?: 1f) * 100 - 70).toInt()
+        rateBar.progress = (((prefs.getString(MadSettings.KEY_RATE, "0.95") ?: "0.95").toFloatOrNull() ?: 0.95f) * 100 - 70).toInt()
         rateBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(b: SeekBar?, p: Int, fromUser: Boolean) {
                 prefs.edit().putString(MadSettings.KEY_RATE, "%.2f".format((p + 70) / 100f)).apply()
@@ -361,6 +395,41 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    /** Google TTS engine ki hi-IN/en-IN voices — dropdown + network/HD badges ke saath. */
+    private fun showVoicePicker(prefs: android.content.SharedPreferences, voiceButton: Button) {
+        val list = ttsList
+        if (list == null) {
+            Toast.makeText(this, "TTS abhi load ho raha hai — thoda der baad try karo", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (list.isEmpty()) {
+            Toast.makeText(this, "Google TTS engine ki voices nahi mili — service start hone do", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val labels = list.map { prettyVoice(it) }
+        val options = listOf("Auto (best natural voice)") + labels
+        val current = prefs.getString(MadSettings.KEY_VOICE_NAME, "") ?: ""
+        val idx = labels.indexOf(current).let { if (it >= 0) it + 1 else 0 }
+        showPicker("Engine Voice chuno (hi-IN / en-IN)", options.toTypedArray(), options[idx.coerceAtMost(options.size - 1)]) { pick ->
+            if (pick.startsWith("Auto")) {
+                prefs.edit().putString(MadSettings.KEY_VOICE_NAME, "").apply()
+                voiceButton.text = "Engine Voice: Auto (best)"
+            } else {
+                val chosen = list[options.indexOf(pick) - 1]
+                prefs.edit().putString(MadSettings.KEY_VOICE_NAME, chosen.name).apply()
+                voiceButton.text = "Engine Voice: " + chosen.name
+            }
+        }
+    }
+
+    private fun prettyVoice(v: android.speech.tts.Voice): String {
+        val tags = mutableListOf<String>()
+        if (v.name.endsWith("-network")) tags.add("HD")
+        if (v.quality == android.speech.tts.Voice.QUALITY_VERY_HIGH || v.quality == android.speech.tts.Voice.QUALITY_HIGH) tags.add("HQ")
+        val tag = if (tags.isEmpty()) "" else " [" + tags.joinToString(" ") + "]"
+        return "${v.name}$tag (${v.locale})"
     }
 
     // ---------- helpers ----------
@@ -525,6 +594,16 @@ class MainActivity : AppCompatActivity() {
         private const val REQ_PERMISSIONS = 1001
         private const val REQ_MIC = 1002
         private const val REQ_NOTIF =  1003
+
+        /** Voice dropdown ke liye — TtsSpeaker init hone ke baad populate hota hai. */
+        @Volatile
+        var ttsList: List<android.speech.tts.Voice>? = null
+            private set
+
+        /** TtsSpeaker se call hota hai (init complete par). */
+        fun onVoicesReady(voices: List<android.speech.tts.Voice>) {
+            ttsList = voices
+        }
     }
 }
 
