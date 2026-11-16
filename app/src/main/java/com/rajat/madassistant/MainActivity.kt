@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
 import android.widget.ArrayAdapter
+import android.widget.AutoCompleteTextView
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -91,7 +92,7 @@ class MainActivity : AppCompatActivity() {
         refreshRunState()
     }
 
-    /** Button aur text ko assistant ke hisaab se update karo. */
+    /** Button ko assistant ke hisaab se update karo. */
     private fun refreshRunState() {
         if (AssistantForegroundService.isRunning) {
             btnStart.setText(R.string.btn_stop)
@@ -102,9 +103,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** API key / Test Connection settings live here, off the main screen. */
+    /** Settings: API key + AI model + Test Connection — sab ek jagah. */
     private fun showSettingsDialog() {
-        val pad = (20 * resources.displayMetrics.density).toInt()
+        val pad = (12 * resources.displayMetrics.density).toInt()
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad, pad, 0)
@@ -118,17 +119,29 @@ class MainActivity : AppCompatActivity() {
         }
         container.addView(input)
 
-        // Test result line (yellow = untested)
+        // --- AI Model dropdown ---
+        container.addView(label("AI Model"))
+        val modelInput = AutoCompleteTextView(this).apply {
+            inputType = InputType.TYPE_NULL
+            keyListener = null
+            setText(getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_MODEL, AiBrainClient.defaultModel()))
+            setAdapter(
+                ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, AiBrainClient.AVAILABLE_MODELS)
+            )
+        }
+        container.addView(modelInput)
+
+        // --- Test result line ---
         val testStatus = TextView(this).apply {
-            text = "● Untested"
+            text = ""
             setTextColor(Color.parseColor("#B58900"))
             textSize = 14f
             gravity = Gravity.CENTER
-            setPadding(0, pad / 2, 0, pad / 2)
+            setPadding(0, pad, 0, pad)
         }
         container.addView(testStatus)
 
-        // Test Connection button
+        // --- Test Connection button ---
         val btnTest = Button(this).apply {
             text = "Test Connection"
             setOnClickListener {
@@ -138,11 +151,12 @@ class MainActivity : AppCompatActivity() {
                     testStatus.setTextColor(Color.RED)
                     return@setOnClickListener
                 }
+                val model = modelInput.text.toString().trim()
                 testStatus.text = "⏳ Testing…"
                 testStatus.setTextColor(Color.parseColor("#B58900"))
                 isEnabled = false
                 CoroutineScope(Dispatchers.Main).launch {
-                    val result = AiBrainClient.testConnection(key)
+                    val result = AiBrainClient.testConnection(key, model)
                     if (result.ok) {
                         testStatus.text = "🟢 ${result.message}"
                         testStatus.setTextColor(Color.parseColor("#0A8F2E"))
@@ -160,16 +174,24 @@ class MainActivity : AppCompatActivity() {
             .setTitle(R.string.settings_title)
             .setView(container)
             .setPositiveButton(R.string.btn_save_key) { _, _ ->
-                val key = input.text.toString().trim()
-                getSharedPreferences(PREFS, MODE_PRIVATE)
-                    .edit()
-                    .putString(KEY_API, key)
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putString(KEY_API, input.text.toString().trim())
+                    .putString(KEY_MODEL, modelInput.text.toString().trim())
                     .apply()
                 statusText.setText(R.string.status_key_saved)
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
+
+    private fun label(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 12f
+        setPadding(0, pad, 0, 0)
+    }
+
+    private val pad: Int
+        get() = (8 * resources.displayMetrics.density).toInt()
 
     private fun showAppPicker() {
         val apps = targetAppManager.getLaunchableApps()
@@ -213,5 +235,6 @@ class MainActivity : AppCompatActivity() {
         private const val REQ_PERMISSIONS = 1001
         private const val PREFS = "mad_prefs"
         private const val KEY_API = "gemini_api_key"
+        private const val KEY_MODEL = "gemini_model"
     }
 }
