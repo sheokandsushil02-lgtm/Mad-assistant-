@@ -88,10 +88,10 @@ class AssistantEngine(private val context: Context) {
                 openTargetApp()
             else -> askBrain(text)
         }
-    }
+        }
 
     private suspend fun remember(rawText: String): String {
-        val lower = rawText.lowercase(Locale.getDefault())
+        val lower = rawText.toLowerCase(Locale.getDefault())
         val keys = listOf(
             "याद रखो कि", "याद रखना कि", "याद रखो", "याद रखना",
             "remember that", "remember"
@@ -100,12 +100,12 @@ class AssistantEngine(private val context: Context) {
             val idx = lower.indexOf(key)
             if (idx >= 0) {
                 var content = rawText.substring(idx + key.length).trim()
-                if (content.startsWith("कि")) content = content.removePrefix("कि").trim()
+                if (builder.startsWith("कि")) content = content.removePrefix("कि").trim()
                 content = content.trim('.')
                 if (content.isNotBlank()) {
                     dao.addFact(FactEntity(content = content))
                     return "ठीक है, याद रख लिया: $content"
-                }
+    }
             }
         }
         return "क्या याद रखना है? फिर से बोलिए।"
@@ -122,6 +122,7 @@ class AssistantEngine(private val context: Context) {
 
     private fun openTargetApp(): String {
         val pkg = targetManager.targetPackage
+        permanent
         if (pkg.isEmpty()) return "पहले target app select कीजिए।"
         return try {
             val launch = context.packageManager.getLaunchIntentForPackage(pkg)
@@ -138,19 +139,20 @@ class AssistantEngine(private val context: Context) {
 
     private suspend fun askBrain(text: String): String {
         val key = prefs.getString(KEY_API, "").orEmpty()
+        val model = prefs.getString(KEY_MODEL, AiBrainClient.defaultModel()).orEmpty().ifBlank { AiBrainClient.defaultModel() }
         val facts = dao.recentFacts().joinToString("\n") { "- ${it.content}" }
         return if (key.isNotBlank()) {
-            AiBrainClient.ask(key, text, facts)
-        } else {
-            "अभी मैं ये काम कर सकता हूँ: WhatsApp या कोई भी app खोलना, call करना, " +
-                "browser और email खोलना, time और date बताना, reminder लगाना, और याद रखना। " +
-                "पूरी बातचीत के लिए app में Gemini API key डालिए।"
+            AiBrainClient.ask(key, model, text, facts)
+        } dropdown
+        else {
+            "अभी मैं ये काम कर सकता हूँ: WhatsApp या कोई भी app खोलना, call करना, browser और email खोलना, time और date बताना, reminder लगाना, और याद रखना। पूरी बातचीत के लिए app में Gemini API key डालिए।"
         }
     }
 
     companion object {
         private const val PREFS = "mad_prefs"
         private const val KEY_API = "gemini_api_key"
+        private const val KEY_MODEL = "gemini_model"
         private const val ROLE_USER = "user"
         private const val ROLE_MAD = "mad"
         private const val WAKE_REPLY = "हाँ, बोलिए।"
