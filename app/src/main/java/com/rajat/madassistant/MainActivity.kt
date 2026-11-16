@@ -32,8 +32,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSettings: Button
     private lateinit var targetAppManager: TargetAppManager
 
-    /** Abhi kaunsa model select hai (dialog ke andar badalta hai). */
-    private var selectedModel: String = AiBrainClient.defaultModel()
+    /** Abhi kaunsa AI company + model select hai (dialog ke andar badalta hai). */
+    private var selectedProvider: String = AiBrainClient.defaultProvider()
+    private var selectedModel: String = AiBrainClient.defaultModel(AiBrainClient.defaultProvider())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -105,38 +106,79 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Settings: API key + AI model + Test Connection — sab ek jagah. */
+    /** Settings: AI company + API key + model + Test Connection — sab ek jagah. */
     private fun showSettingsDialog() {
         val pad = (12 * resources.displayMetrics.density).toInt()
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+
+        // Saved values load karo
+        selectedProvider = prefs.getString(KEY_PROVIDER, AiBrainClient.defaultProvider())!!
+            .ifBlank { AiBrainClient.defaultProvider() }
+        selectedModel = prefs.getString(KEY_MODEL, "").orEmpty()
+            .ifBlank { AiBrainClient.defaultModel(selectedProvider) }
+
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad, pad, 0)
         }
 
-        // Saved model load karo
-        selectedModel = getSharedPreferences(PREFS, MODE_PRIVATE)
-            .getString(KEY_MODEL, AiBrainClient.defaultModel())!!
-            .ifBlank { AiBrainClient.defaultModel() }
+        // --- AI Company picker ---
+        val providerLabel = TextView(this).apply {
+            text = "AI Company (tap to change)"
+            textSize = 12f
+            setPadding(0, 0, 0, 0)
+        }
+        container.addView(providerLabel)
 
+        val providerButton = Button(this).apply {
+            text = "🏢  $selectedProvider"
+            setOnClickListener {
+                showPicker("AI Company chuno", AiBrainClient.PROVIDERS, selectedProvider) { picked ->
+                    selectedProvider = picked
+                    selectedModel = AiBrainClient.defaultModel(picked)
+                    providerButton.text = "🏢  $selectedProvider"
+                    modelButton.text = "🤖  $selectedModel"
+                }
+            }
+        }
+        container.addView(providerButton)
+
+        // --- API key ---
         val input = EditText(this).apply {
-            hint = getString(R.string.api_key_hint)
-            setText(getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_API, ""))
+            hint = "API key ($selectedProvider)"
+            setText(prefs.getString(KEY_API, ""))
             inputType = InputType.TYPE_CLASS_TEXT
             setSingleLine()
         }
         container.addView(input)
 
-        // --- AI Model: tap karo to list dialog khulega (tick ke saath) ---
-        val label = TextView(this).apply {
+        // --- Model picker + custom model ---
+        val modelLabel = TextView(this).apply {
             text = "AI Model (tap to change)"
             textSize = 12f
             setPadding(0, pad, 0, 0)
         }
-        container.addView(label)
+        container.addView(modelLabel)
 
         val modelButton = Button(this).apply {
-            text = "⚙️  $selectedModel"
-            setOnClickListener { showModelPicker { modelButton.text = "⚙️  $selectedModel" } }
+            text = "🤖  $selectedModel"
+            setOnClickListener {
+                val models = AiBrainClient.modelsFor(selectedProvider).toMutableList()
+                models.add("✏️  Custom model (type karo)")
+                showPicker("Model chuno ($selectedProvider)", models.toTypedArray(), selectedModel) { picked ->
+                    if (picked.startsWith("✏️")) {
+                        askCustomModel { custom ->
+                            if (custom.isNotBlank()) {
+                                selectedModel = custom
+                                modelButton.text = "🤖  $selectedModel"
+                            }
+                        }
+                    } else {
+                        selectedModel = picked
+                        modelButton.text = "🤖  $selectedModel"
+                    }
+                }
+            }
         }
         container.addView(modelButton)
 
@@ -164,7 +206,7 @@ class MainActivity : AppCompatActivity() {
                 testStatus.setTextColor(Color.parseColor("#B58900"))
                 isEnabled = false
                 CoroutineScope(Dispatchers.Main).launch {
-                    val result = AiBrainClient.testConnection(key, selectedModel)
+                    val result = AiBrainClient.testConnection(selectedProvider, key, selectedModel)
                     if (result.ok) {
                         testStatus.text = "🟢 ${result.message}"
                         testStatus.setTextColor(Color.parseColor("#0A8F2E"))
@@ -182,8 +224,9 @@ class MainActivity : AppCompatActivity() {
             .setTitle(R.string.settings_title)
             .setView(container)
             .setPositiveButton(R.string.btn_save_key) { _, _ ->
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                prefs.edit()
                     .putString(KEY_API, input.text.toString().trim())
+                    .putString(KEY_PROVIDER, selectedProvider)
                     .putString(KEY_MODEL, selectedModel)
                     .apply()
                 statusText.setText(R.string.status_key_saved)
@@ -192,15 +235,32 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** Model list — tap par tick ke saath select hota hai. */
-    private fun showModelPicker(onPicked: () -> Unit) {
-        val models = AiBrainClient.AVAILABLE_MODELS
-        val current = models.indexOf(selectedModel).let { if (it >= 0) it else 0 }
+    /** Custom model naam poochho (future models — jaise 3.8 — ke liye). */
+    private fun askCustomModel(onDone: (String) -> Unit) {
+        val box = EditText(this).apply {
+            hint = "Model ka exact naam type karo"
+            setSingleLine()
+        }
         AlertDialog.Builder(this)
-            .setTitle("AI Model chuno")
-            .setSingleChoiceItems(models.toTypedArray(), current) { dialog, which ->
-                selectedModel = models[which]
-                onPicked()
+            .setTitle("Custom Model")
+            .setView(box)
+            .setPositiveButton("OK") { _, _ -> onDone(box.text.toString().trim()) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    /** Common list dialog — tap par tick ke saath select. */
+    private fun showPicker(
+        title: String,
+        options: Array<String>,
+        current: String,
+        onPicked: (String) -> Unit
+    ) {
+        val currentIdx = options.indexOf(current).let { if (it >= 0) it else 0 }
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setSingleChoiceItems(options, currentIdx) { dialog, which ->
+                onPicked(options[which])
                 dialog.dismiss()
             }
             .setNegativeButton("Cancel", null)
@@ -214,7 +274,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val labels = apps.map { "${it.label}  (${it.packageName})" }
-        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, labels)
+        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, lists(apps, labels))
         AlertDialog.Builder(this)
             .setTitle(R.string.select_target_title)
             .setAdapter(adapter) { _, which ->
@@ -223,6 +283,10 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    private fun lists(apps: List<com.rajat.madassistant.core.LaunchableApp>, labels: List<String>): List<String> {
+        return labels
     }
 
     private fun updateTargetLabel() {
@@ -249,6 +313,7 @@ class MainActivity : AppCompatActivity() {
         private const val REQ_PERMISSIONS = 1001
         private const val PREFS = "mad_prefs"
         private const val KEY_API = "gemini_api_key"
-        private const val KEY_MODEL = "gemini_model"
+        private const val KEY_PROVIDER = "ai_provider"
+        private const val KEY_MODEL = "ai_model"
     }
 }
