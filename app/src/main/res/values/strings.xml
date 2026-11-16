@@ -2,12 +2,16 @@
 <resources>
     <string name="app_name">MAD Assistant</string>
     <string name="btn_start">Start Assistant</string>
+    <string name="btn_select_target">Select Target App</string>
+    <string name="btn_target_selected">Target: %1$s</string>
+    <string name="select_target_title">Choose the app the agent will control</string>
+    <string name="status_no_apps">No launchable apps found on this device.</string>
     <string name="status_permission_needed">Microphone and notification permissions are required. Tap Start again after granting.</string>
     <string name="status_listening">Assistant running. Say \"Hey Mad\".</string>
     <string name="notification_channel_name">MAD Assistant</string>
     <string name="notification_channel_description">Keeps the assistant listening for the wake word in the background.</string>
     <string name="notification_title">MAD Assistant</string>
     <string name="notification_text">Always listening for \"Hey Mad\"</string>
-    <string name="accessibility_service_label">MAD Assistant REMS Bridge</string>
-    <string name="accessibility_service_description">Allows MAD Assistant to automate ledger, inventory, and transaction actions inside the REMS Business app on your behalf.</string>
+    <string name="accessibility_service_label">MAD Assistant Control Bridge</string>
+    <string name="accessibility_service_description">Allows MAD Assistant to automate actions inside the app you select on your behalf.</string>
 </resources>
