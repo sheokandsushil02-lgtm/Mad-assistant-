@@ -3,9 +3,11 @@ package com.rajat.madassistant
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
+import android.view.Gravity
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
@@ -15,8 +17,12 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.rajat.madassistant.brain.AiBrainClient
 import com.rajat.madassistant.core.TargetAppManager
 import com.rajat.madassistant.service.AssistantForegroundService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
@@ -41,13 +47,14 @@ class MainActivity : AppCompatActivity() {
         updateTargetLabel()
     }
 
-    /** API key / connection settings live here, off the main screen. */
+    /** API key / Test Connection settings live here, off the main screen. */
     private fun showSettingsDialog() {
         val pad = (20 * resources.displayMetrics.density).toInt()
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad, pad, 0)
         }
+
         val input = EditText(this).apply {
             hint = getString(R.string.api_key_hint)
             setText(getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_API, ""))
@@ -55,6 +62,44 @@ class MainActivity : AppCompatActivity() {
             setSingleLine()
         }
         container.addView(input)
+
+        // Test result line (yellow = untested)
+        val testStatus = TextView(this).apply {
+            text = "● Untested"
+            setTextColor(Color.parseColor("#B58900"))
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setPadding(0, pad / 2, 0, pad / 2)
+        }
+        container.addView(testStatus)
+
+        // Test Connection button
+        val btnTest = Button(this).apply {
+            text = "Test Connection"
+            setOnClickListener {
+                val key = input.text.toString().trim()
+                if (key.isBlank()) {
+                    testStatus.text = "🔴 API key khaali hai"
+                    testStatus.setTextColor(Color.RED)
+                    return@setOnClickListener
+                }
+                testStatus.text = "⏳ Testing…"
+                testStatus.setTextColor(Color.parseColor("#B58900"))
+                isEnabled = false
+                CoroutineScope(Dispatchers.Main).launch {
+                    val result = AiBrainClient.testConnection(key)
+                    if (result.ok) {
+                        testStatus.text = "🟢 ${result.message}"
+                        testStatus.setTextColor(Color.parseColor("#0A8F2E"))
+                    } else {
+                        testStatus.text = "🔴 ${result.message}"
+                        testStatus.setTextColor(Color.RED)
+                    }
+                    isEnabled = true
+                }
+            }
+        }
+        container.addView(btnTest)
 
         AlertDialog.Builder(this)
             .setTitle(R.string.settings_title)
@@ -103,13 +148,11 @@ class MainActivity : AppCompatActivity() {
     private fun startAssistant() {
         val needed = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             needed.add(Manifest.permission.POST_NOTIFICATIONS)
         }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
-            PackageManager.PERMISSION_GRANTED
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
         ) {
             needed.add(Manifest.permission.RECORD_AUDIO)
         }
