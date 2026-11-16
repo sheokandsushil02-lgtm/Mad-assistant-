@@ -42,6 +42,12 @@ interface GeminiApi {
     ): GeminiResponse
 }
 
+/** Result of the Test Connection button. */
+data class ConnectionTest(
+    val ok: Boolean,
+    val message: String
+)
+
 /**
  * Talks to the Gemini REST API. Returns short spoken-style answers.
  * If the call fails (no key / no internet), returns a Hindi fallback line.
@@ -62,6 +68,40 @@ object AiBrainClient {
         .addConverterFactory(GsonConverterFactory.create())
         .build()
         .create(GeminiApi::class.java)
+
+    /**
+     * Test Connection button ka backend.
+     * Gemini ko chhota "Say OK" bhejta hai aur batata hai key/Internet theek hai ya nahi.
+     */
+    suspend fun testConnection(apiKey: String): ConnectionTest = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) {
+            return@withContext ConnectionTest(false, "API key khaali hai")
+        }
+        try {
+            val response = api.generate(
+                MODEL, apiKey,
+                GeminiRequest(contents = listOf(GeminiContent(listOf(GeminiPart("Say OK")))))
+            )
+            val text = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
+            if (text.isNullOrBlank()) {
+                ConnectionTest(false, "Gemini ka jawab khaali aaya")
+            } else {
+                ConnectionTest(true, "Gemini se jawab mil gaya")
+            }
+        } catch (e: Exception) {
+            val raw = e.message ?: ""
+            val reason = when {
+                raw.contains("401") || raw.contains("403") ||
+                    raw.contains("API_KEY_INVALID", true) ||
+                    raw.contains("PERMISSION_DENIED", true) ||
+                    raw.contains("API key not valid", true) -> "API key galat hai"
+                raw.contains("429") || raw.contains("quota", true) -> "Key ki limit khatam ho gayi (quota)"
+                raw.contains("404") -> "Model naam galat hai"
+                else -> "Internet/network problem"
+            }
+            ConnectionTest(false, reason)
+        }
+    }
 
     suspend fun ask(apiKey: String, userText: String, memoryContext: String): String =
         withContext(Dispatchers.IO) {
