@@ -12,10 +12,11 @@ import android.speech.SpeechRecognizer
 /**
  * Always-on listening loop built on Android's built-in SpeechRecognizer.
  *
- * The SAME recognizer instance is reused for every session. Sessions re-arm
- * automatically after ERROR_NO_MATCH / ERROR_SPEECH_TIMEOUT without crashing,
- * and long silence windows keep the mic alive in quiet surroundings.
- * Language mode (hinglish/hindi/english) Settings se live padha jaata hai.
+ * ERROR_RECOGNIZER_BUSY / ERROR_CLIENT (Google app ke known deadlocks) par
+ * recognizer instance ko destroy + recreate kiya jaata hai (500ms delay ke
+ * saath) — isse assistant "sunna band kar deta" bug fix hota hai.
+ * NO_MATCH / SPEECH_TIMEOUT par soft-restart, aur sab kuch "Mic: ..." debug
+ * broadcasts karta hai.
  */
 class VoiceLoop(
     private val context: Context,
@@ -24,6 +25,11 @@ class VoiceLoop(
 
     @Volatile
     var isCommand = false
+        private set
+
+    /** Debug console ke liye mic ka current state ("listening"/"idle"/"recreating"...). */
+    @Volatile
+    var lastStatus: String = "idle"
         private set
 
     @Volatile
@@ -35,24 +41,49 @@ class VoiceLoop(
     private var recognizer: SpeechRecognizer? = null
     private val main = Handler(Looper.getMainLooper())
 
+    private fun report(s: String) {
+        lastStatus = s
+        val i = Intent(MadEvents.STATUS).setPackage(context.packageName)
+            .putExtra(MadEvents.EXTRA_TEXT, "Mic: $s")
+        runCatching { context.sendBroadcast(i) }
+    }
+
     private val listener = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) {}
+        override fun onReadyForSpeech(params: Bundle?) {
+            report(if (isCommand) "listening (command)" else "listening (wake)")
+        }
+
         override fun onBeginningOfSpeech() {}
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() {}
+
         override fun onPartialResults(partialResults: Bundle?) {}
+
         override fun onEvent(eventType: Int, params: Bundle?) {}
 
         override fun onError(error: Int) {
             if (stopped) return
-            val delay = when (error) {
+            val name = errName(error)
+            when (error) {
+                // Google recognizer ke fatal errors — soft restart kaam nahi karta:
+                // purana instance destroy karke NAYA instance banao (500ms baad).
+                SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
+                SpeechRecognizer.ERROR_CLIENT -> {
+                    report("error $name — recreating recognizer")
+                    destroyRecognizer()
+                    restartAfter(500)
+                }
                 SpeechRecognizer.ERROR_NO_MATCH,
-                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> 250L
-                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> 800L
-                else -> 500L
+                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
+                    report("error $name")
+                    restartAfter(250)
+                }
+                else -> {
+                    report("error $name")
+                    restartAfter(500)
+                }
             }
-            restartAfter(delay)
         }
 
         override fun onResults(results: Bundle?) {
@@ -91,11 +122,13 @@ class VoiceLoop(
         stopped = true
         paused = true
         destroyRecognizer()
+        report("idle (stopped)")
     }
 
     private fun startListening() {
         if (paused || stopped) return
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+            report("speech service missing — retry in 5s")
             main.postDelayed({ startListening() }, 5000)
             return
         }
@@ -106,6 +139,8 @@ class VoiceLoop(
         try {
             sr.startListening(listenIntent())
         } catch (_: Exception) {
+            report("start failed — recreating recognizer")
+            destroyRecognizer()
             restartAfter(1000)
         }
     }
@@ -130,6 +165,19 @@ class VoiceLoop(
             }
         }
         recognizer = null
+    }
+
+    private fun errName(error: Int): String = when (error) {
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "NETWORK_TIMEOUT"
+        SpeechRecognizer.ERROR_NETWORK -> "NETWORK"
+        SpeechRecognizer.ERROR_AUDIO -> "AUDIO"
+        SpeechRecognizer.ERROR_SERVER -> "SERVER"
+        SpeechRecognizer.ERROR_CLIENT -> "CLIENT"
+        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "SPEECH_TIMEOUT"
+        SpeechRecognizer.ERROR_NO_MATCH -> "NO_MATCH"
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "RECOGNIZER_BUSY"
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "INSUFFICIENT_PERMISSIONS"
+        else -> "UNKNOWN($error)"
     }
 
     private fun listenIntent(): Intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
