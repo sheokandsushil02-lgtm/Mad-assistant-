@@ -22,11 +22,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.util.Locale
 
-/**
- * The orchestrator: wake word -> listen -> decide -> speak (+ show bubble).
- * Settings har command par fresh padhi jaati hai — Save karte hi naye
- * voice/persona/model lag jaate hain, app restart nahi chahiye.
- */
+/** Voice assistant orchestrator: wake word/manual trigger -> command -> action -> voice reply. */
 class AssistantEngine(private val context: Context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -53,29 +49,23 @@ class AssistantEngine(private val context: Context) {
         scope.cancel()
     }
 
-    /** Settings Save ke baad service ise bulata hai — naye voice settings turant. */
-    fun reload() {
-        tts.reload()
-    }
+    fun reload() = tts.reload()
 
-    /** Manual "Tap to Speak" / orb tap — wake word ki zaroorat nahi. */
+    /** Manual mic/orb tap: skip wake word and capture the next phrase. */
     fun listenNow() {
         beep()
         status("Listening... boliye")
         loop.startCommand()
     }
 
-    /** Floating orb chat bubble se aaya text command — STT skip, seedha brain. */
+    /** Text typed into the floating chat. */
     fun handleText(text: String) {
-        if (text.isBlank()) return
-        scope.launch { handleCommand(text) }
+        if (text.isNotBlank()) scope.launch { handleCommand(text.trim()) }
     }
 
-    /** Test Voice button — current voice/pitch/speed me sample. */
     fun testVoice() {
-        val name = if (prefs.getString(MadSettings.KEY_VOICE_GENDER, "system") == "female")
-            "Maya" else "Jarvis"
-        tts.speak("Namaste Sushil, main $name bol rahi hoon. MAD taiyar hai.")
+        val name = if (prefs.getString(MadSettings.KEY_VOICE_GENDER, "system") == "female") "Maya" else "Jarvis"
+        tts.speak("Namaste Sushil, main $name hoon. MAD taiyar hai.")
     }
 
     private fun beep() {
@@ -86,7 +76,6 @@ class AssistantEngine(private val context: Context) {
         }
     }
 
-    /** Live status — MainActivity aur floating orb dono yahi dikhate hain. */
     private fun status(text: String) {
         val i = Intent(MadEvents.STATUS).setPackage(context.packageName)
             .putExtra(MadEvents.EXTRA_TEXT, text)
@@ -96,23 +85,23 @@ class AssistantEngine(private val context: Context) {
     private suspend fun onHeard(text: String) {
         if (loop.isCommand) {
             handleCommand(text)
-        } else {
-            if (!prefs.getBoolean(MadSettings.KEY_WAKE_ENABLED, true)) return
-            val t = text.lowercase(Locale.getDefault())
-            val wake = (prefs.getString(MadSettings.KEY_WAKE, "hey mad") ?: "hey mad")
-                .lowercase(Locale.getDefault())
-            if (t.contains(wake) || t.contains("mad") || t.contains("मद") || t.contains("मैड") || t.contains("hey mate")) {
-                loop.pause()
-                beep()
-                tts.speak(WAKE_REPLY) { loop.startCommand() }
-            }
+            return
+        }
+        if (!prefs.getBoolean(MadSettings.KEY_WAKE_ENABLED, true)) return
+        val t = text.lowercase(Locale.getDefault())
+        val wake = (prefs.getString(MadSettings.KEY_WAKE, "hey mad") ?: "hey mad")
+            .trim().lowercase(Locale.getDefault())
+        if (t.contains(wake) || t.contains("mad") || t.contains("मद") || t.contains("मैड") || t.contains("hey mate")) {
+            loop.pause()
+            beep()
+            tts.speak(WAKE_REPLY) { loop.startCommand() }
         }
     }
 
     private suspend fun handleCommand(text: String) {
         loop.pause()
-        dao.addChat(ChatEntity(role = ROLE_USER, content = text))
         status("Heard: $text")
+        dao.addChat(ChatEntity(role = ROLE_USER, content = text))
         status("Thinking...")
         val reply = decide(text)
         dao.addChat(ChatEntity(role = ROLE_MAD, content = reply))
@@ -120,8 +109,11 @@ class AssistantEngine(private val context: Context) {
         status("MAD: $reply")
         if (prefs.getBoolean(MadSettings.KEY_TTS_ENABLED, true)) {
             status("Speaking...")
-            tts.speak(reply) { status("Listening... say hey mad"); loop.startWake() }
-        } else {
+            tts.speak(reply) {
+                status("Listening... say hey mad")
+                if (prefs.getBoolean(MadSettings.KEY_WAKE_ENABLED, true)) loop.startWake()
+            }
+        } else if (prefs.getBoolean(MadSettings.KEY_WAKE_ENABLED, true)) {
             loop.startWake()
         }
     }
@@ -133,22 +125,18 @@ class AssistantEngine(private val context: Context) {
     private suspend fun decide(text: String): String {
         val t = text.lowercase(Locale.getDefault())
         return when {
-            t.contains("याद रख") || tcontains("remember") -> remember(text)
+            t.contains("याद रख") || t.contains("remember") -> remember(text)
             t.contains("क्या याद") || t.contains("याद है") || t.contains("what do you remember") -> recall()
             reminders.handle(text) != null -> reminders.handle(text)!!
             phoneSkills.handle(text) != null -> phoneSkills.handle(text)!!
-            t.contains("खोल") || (t.contains("open") && (t.contains("app") || t.contains("target"))) ->
-                openTargetApp()
+            t.contains("खोल") || (t.contains("open") && (t.contains("app") || t.contains("target"))) -> openTargetApp()
             else -> askBrain(text)
         }
     }
 
     private suspend fun remember(rawText: String): String {
         val lower = rawText.lowercase(Locale.getDefault())
-        val keys = listOf(
-            "याद रखो कि", "याद रखना कि", "याद रखो", "याद रखना",
-            "remember that", "remember"
-        )
+        val keys = listOf("याद रखो कि", "याद रखना कि", "याद रखो", "याद रखना", "remember that", "remember")
         for (key in keys) {
             val idx = lower.indexOf(key)
             if (idx >= 0) {
@@ -166,11 +154,8 @@ class AssistantEngine(private val context: Context) {
 
     private suspend fun recall(): String {
         val facts = dao.recentFacts().take(5)
-        return if (facts.isEmpty()) {
-            "अभी कुछ याद नहीं है।"
-        } else {
-            "आपने कहा था: " + facts.joinToString("; ") { it.content }
-        }
+        return if (facts.isEmpty()) "अभी कुछ याद नहीं है।"
+        else "आपने कहा था: " + facts.joinToString("; ") { it.content }
     }
 
     private fun openTargetApp(): String {
@@ -178,34 +163,26 @@ class AssistantEngine(private val context: Context) {
         if (pkg.isEmpty()) return "पहले target app select कीजिए।"
         return try {
             val launch = context.packageManager.getLaunchIntentForPackage(pkg)
-            if (launch == null) {
-                "यह app नहीं खुल पाई।"
-            } else {
+            if (launch == null) "यह app नहीं खुल पाई।"
+            else {
                 context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 "${targetManager.labelFor(pkg)} खोल रहा हूँ।"
             }
-        } catch (_: Exception) {
-            "app खोलने में दिक्कत आई।"
-        }
+        } catch (_: Exception) { "app खोलने में दिक्कत आई।" }
     }
 
     private suspend fun askBrain(text: String): String {
         val key = prefs.getString(MadSettings.KEY_API, "").orEmpty()
-        if (key.isBlank()) {
-            return "अभी मैं ये काम कर सकता हूँ: WhatsApp या कोई भी app खोलना, call करना, " +
-                "browser और email खोलना, time और date बताना, reminder लगाना, और याद रखना। " +
-                "पूरी बातचीत के लिए Settings में API key डालिए।"
-        }
+        if (key.isBlank()) return "पूरी बातचीत के लिए Settings में AI provider की API key डालिए।"
         val provider = prefs.getString(MadSettings.KEY_PROVIDER, AiBrainClient.defaultProvider())
             .orEmpty().ifBlank { AiBrainClient.defaultProvider() }
-        val model = prefs.getString(MadSettings.KEY_MODEL, "")
-            .orEmpty().ifBlank { AiBrainClient.defaultModel(provider) }
+        val model = prefs.getString(MadSettings.KEY_MODEL, "").orEmpty()
+            .ifBlank { AiBrainClient.defaultModel(provider) }
         val persona = prefs.getString(MadSettings.KEY_PERSONA, "")
             ?.ifBlank { MadSettings.personaDefault() } ?: MadSettings.personaDefault()
         val facts = dao.recentFacts().joinToString("\n") { "- ${it.content}" }
-        val systemContext = "Assistant persona:\n$persona" +
-            if (facts.isNotBlank()) "\nKnown facts about the user:\n$facts" else ""
-        return AiBrainClient.ask(provider, key, model, text, systemContext)
+        val contextText = "Assistant persona:\n$persona" + if (facts.isNotBlank()) "\nKnown facts:\n$facts" else ""
+        return AiBrainClient.ask(provider, key, model, text, contextText)
     }
 
     companion object {
