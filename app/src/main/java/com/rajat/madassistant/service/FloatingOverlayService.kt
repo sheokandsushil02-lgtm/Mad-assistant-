@@ -36,11 +36,16 @@ class FloatingOverlayService : Service() {
     private var orb: View? = null
     private var chat: View? = null
     private val main = Handler(Looper.getMainLooper())
-    private var pulseRunnable: Runnable? = null
+
+    private var lastStatus = "MAD taiyar hai"
+    private var chatText: TextView? = null
+    private var lastShown: String = ""
 
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
-            textExtra -> Unit
+            val text = i?.getStringExtra("text") ?: return
+            lastStatus = text
+            chatText?.text = text
         }
     }
 
@@ -49,12 +54,10 @@ class FloatingOverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        registerReceiver(statusReceiver, IntentFilter("com.rajat.madassistant.STATUS"))
+        runCatching {
+            registerReceiver(statusReceiver, IntentFilter("com.rajat.madassistant.STATUS"))
+        }
     }
-
-    private var lastStatus = "MAD taiyar hai"
-    private var chatText: TextView? = null
-    private var lastShown: String = ""
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (!Settings.canDrawOverlays(this)) {
@@ -62,7 +65,7 @@ class FloatingOverlayService : Service() {
             return START_NOT_STICKY
         }
         if (orb == null) showOrb()
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
@@ -86,8 +89,7 @@ class FloatingOverlayService : Service() {
 
         val params = WindowManager.LayoutParams(
             size, size,
-            if (REMOTEDP >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
+            overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -96,33 +98,54 @@ class FloatingOverlayService : Service() {
             y = dp(160)
         }
 
-        // Pulsing animation (listening/speaking glow)
-        pulseRunnable = object : Runnable {
+        // Pulsing glow animation
+        val pulse = object : Runnable {
             override fun run() {
-                view.animate().scaleX(1. meawith 0
+                view.animate()
+                    .scaleX(1.15f).scaleY(1.15f).alpha(0.85f)
+                    .setDuration(600)
+                    .withEndAction {
+                        view.animate()
+                            .scaleX(1f).scaleY(1f).alpha(1f)
+                            .setDuration(600)
+                            .withEndAction { run() }
+                            .start()
+                    }
+                    .start()
             }
         }
-        main.post(pulseRunnable!!)
+        main.post(pulse)
 
-        // Tap = listen now, Long press = chat bubble
+        // Tap = listen now, Long press = chat bubble, Drag = move
         view.setOnTouchListener(object : View.OnTouchListener {
-            var downX = 0f; var downY = 0f; var startX = 0; var startY = 0
-            var moved = false; var longPressed = false
+            var downX = 0f
+            var downY = 0f
+            var startX = 0
+            var startY = 0
+            var moved = false
+            var longPressed = false
 
             override fun onTouch(v: View, e: MotionEvent): Boolean {
                 when (e.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
-                        downX = e.rawX; downY = e.rawY
-                        startX = params.x; startY = params.y
-                        moved = false; longPressed = false
-                        main.postDelayed({ longPressed = true; showChat() }, 500)
-                        true
+                        downX = e.rawX
+                        downY = e.rawY
+                        startX = params.x
+                        startY = params.y
+                        moved = false
+                        longPressed = false
+                        main.postDelayed({
+                            if (!moved) {
+                                longPressed = true
+                                showChat()
+                            }
+                        }, 600)
                     }
                     MotionEvent.ACTION_MOVE -> {
                         if (kotlin.math.abs(e.rawX - downX) > dp(8) ||
                             kotlin.math.abs(e.rawY - downY) > dp(8)
                         ) moved = true
-                        if (manual) {
+                        if (moved) {
                             params.x = startX + (e.rawX - downX).toInt()
                             params.y = startY + (e.rawY - downY).toInt()
                             runCatching { wm.updateViewLayout(v, params) }
@@ -139,15 +162,18 @@ class FloatingOverlayService : Service() {
 
         runCatching { wm.addView(view, params) }
         orb = view
+        main.post(pulse)
     }
+
+    private fun overlayType(): Int =
+        if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
 
     private fun listenNow() {
         val i = Intent(this, AssistantForegroundService::class.java)
             .setAction(AssistantForegroundService.ACTION_LISTEN_NOW)
         startService(i)
     }
-
-    tap
 
     /** Mini chat bubble — last command, AI reply + text input. */
     @SuppressLint("ClickableViewAccessibility")
@@ -165,7 +191,7 @@ class FloatingOverlayService : Service() {
 
         val title = TextView(this).apply {
             text = "MAD Assistant"
-            setColor(Color.parseColor("#4FC3F7"))
+            setTextColor(Color.parseColor("#4FC3F7"))
             textSize = 15f
         }
         val body = TextView(this).apply {
@@ -176,10 +202,13 @@ class FloatingOverlayService : Service() {
         }
         chatText = body
 
-        val input = EditText(this).y
-        val send = Button(this).apply {
-            text = "Send"
+        val input = EditText(this).apply {
+            hint = "Type karo..."
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            textSize = 14f
         }
+        val send = Button(this).apply { text = "Send" }
         val close = Button(this).apply { text = "X" }
 
         send.setOnClickListener {
@@ -202,9 +231,9 @@ class FloatingOverlayService : Service() {
 
         val params = WindowManager.LayoutParams(
             dp(300), WindowManager.LayoutParams.WRAP_CONTENT,
-            if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.CENTER
@@ -212,12 +241,11 @@ class FloatingOverlayService : Service() {
 
         runCatching { wm.addView(root, params) }
         chat = root
-        input.requestFocus()
     }
 
     private fun sendToBrain(q: String) {
         val i = Intent(this, AssistantForegroundService::class.java)
-            .setAction("com.rajat.madassistant.TEXT_COMMAND")
+            .setAction(AssistantForegroundService.ACTION_TEXT_COMMAND)
             .putExtra("text", q)
         startService(i)
     }
