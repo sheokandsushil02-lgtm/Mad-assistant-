@@ -126,7 +126,16 @@ class MainActivity : AppCompatActivity() {
             setPadding(pad, pad, pad, 0)
         }
 
-        // --- Model button pehle banao ---
+        // --- Test result line (sabse pehle declare — baaki isko update karte hain) ---
+        val testStatus = TextView(this).apply {
+            text = ""
+            setTextColor(Color.parseColor("#B58900"))
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setPadding(0, pad / 2, 0, pad / 2)
+        }
+
+        // --- Model button ---
         val modelButton = Button(this).apply {
             text = "🤖  $selectedModel"
         }
@@ -138,25 +147,17 @@ class MainActivity : AppCompatActivity() {
             }
             val display = models.toMutableList()
             display.add("✏️  Custom model (type karo)")
-            display.add("🔄  Fetch from server (Gemini key se)")
             showPicker("Model chuno ($selectedProvider)", display.toTypedArray(), selectedModel) { picked ->
-                when {
-                    picked.startsWith("✏️") -> {
-                        askCustomModel { custom ->
-                            if (custom.isNotBlank()) {
-                                selectedModel = custom
-                                modelButton.text = "🤖  $selectedModel"
-                            }
+                if (picked.startsWith("✏️")) {
+                    askCustomModel { custom ->
+                        if (custom.isNotBlank()) {
+                            selectedModel = custom
+                            modelButton.text = "🤖  $selectedModel"
                         }
                     }
-                    picked.startsWith("🔄") -> {
-                        // fetch yahan nahi hota — Fetch button use karo (neeche)
-                        testStatus.text = "🔽 'Fetch Available Models' button dabao"
-                    }
-                    else -> {
-                        selectedModel = picked
-                        modelButton.text = "🤖  $selectedModel"
-                    }
+                } else {
+                    selectedModel = picked
+                    modelButton.text = "🤖  $selectedModel"
                 }
             }
         }
@@ -192,22 +193,6 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, pad, 0, 0)
         }
 
-        // --- Test result line ---
-        val testStatus = TextView(this).apply {
-            text = ""
-            setTextColor(Color.parseColor("#B58900"))
-            textSize = 13f
-            gravity = Gravity.CENTER
-            setPadding(0, pad / 2, 0, pad / 2)
-        }
-
-        // --- UI order ---
-        container.addView(providerLabel)
-        container.addView(providerButton)
-        container.addView(input)
-        container.addView(modelLabel)
-        container.addView(modelButton)
-
         // --- Fetch Available Models button ---
         val btnFetch = Button(this).apply {
             text = "🔄 Fetch Available Models"
@@ -235,7 +220,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        container.addView(btnFetch)
 
         // --- Test Connection button ---
         val btnTest = Button(this).apply {
@@ -263,6 +247,14 @@ class MainActivity : AppCompatActivity() {
                 btnTest.isEnabled = true
             }
         }
+
+        // --- UI order ---
+        container.addView(providerLabel)
+        container.addView(providerButton)
+        container.addView(input)
+        container.addView(modelLabel)
+        container.addView(modelButton)
+        container.addView(btnFetch)
         container.addView(btnTest)
         container.addView(testStatus)
 
