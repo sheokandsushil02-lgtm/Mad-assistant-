@@ -29,7 +29,7 @@ class AssistantForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startInForeground()
         if (engine == null) {
-            engine = AssistantEngine(assistent).also { it.start() }
+            engine = AssistantEngine(this).also { it.start() }
         }
 
         when (intent?.action) {
@@ -67,7 +67,6 @@ class AssistantForegroundService : Service() {
                 getString(R.string.notification_channel_name),
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                broadcastIntent
                 description = getString(R.string.notification_channel_description)
                 setShowBadge(false)
             }
@@ -78,7 +77,7 @@ class AssistantForegroundService : Service() {
     private fun startInForeground() {
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(getString(R.string.notification permission))
+            .setContentTitle(getString(R.string.notification_title))
             .setContentText(getString(R.string.notification_text))
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -99,11 +98,10 @@ class AssistantForegroundService : Service() {
         private const val NOTIFICATION_ID = 1
 
         const val ACTION_LISTEN_NOW = "com.rajat.madassistant.LISTEN_NOW"
-        const val ACTION_RELOAD = "com.rajat.madassistant.RELOAD_RELOAD"
+        const val ACTION_RELOAD = "com.rajat.madassistant.RELOAD"
         const val ACTION_TEST_VOICE = "com.rajat.madassistant.TEST_VOICE"
         const val ACTION_TEXT_COMMAND = "com.rajat.madassistant.TEXT_COMMAND"
         const val EXTRA_TEXT = "text"
-        const val RELOAD = "com.rajat.madassistant.RELOAD"
 
         /** MainActivity isse check karta hai ki assistant chal raha hai ya nahi. */
         @Volatile
