@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.os.Handler
+import android.os.Looper
 import com.rajat.madassistant.brain.AiBrainClient
 import com.rajat.madassistant.data.ChatEntity
 import com.rajat.madassistant.data.FactEntity
@@ -22,7 +24,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.util.Locale
 
-/** Voice assistant orchestrator: wake word/manual trigger -> command -> action -> voice reply. */
+/**
+ * Voice assistant orchestrator:
+ *   wake word -> ONE-SHOT command ya "haan boliye" -> command -> Gemini reply -> TTS
+ *   -> background wake listening resume.
+ */
 class AssistantEngine(private val context: Context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -30,12 +36,27 @@ class AssistantEngine(private val context: Context) {
     private val prefs = context.getSharedPreferences(MadSettings.PREFS, Context.MODE_PRIVATE)
     private val targetManager = TargetAppManager(context)
     private val tts = TtsSpeaker(context)
-    private val loop = VoiceLoop(context) { heard -> scope.launch { onHeard(heard) } }
+    private val main = Handler(Looper.getMainLooper())
+
+    /**
+     * VoiceLoop do callbacks deta hai:
+     *  - onWake: sirf wake word bola (two-step mode shuru karo)
+     *  - onCommand: poora command text (one-shot ya command session ya text input)
+     */
+    private val loop = VoiceLoop(
+        context,
+        onWake = { heard -> scope.launch { onWakeWord(heard) } },
+        onCommand = { command -> scope.launch { handleCommand(command) } }
+    )
     private val phoneSkills = PhoneSkills(context)
     private val reminders = ReminderManager(context)
     private var tone: ToneGenerator? = null
 
-    /** Wake partial + final dono se trigger ho sakta hai — duplicate "haan boliye" block. */
+    /** Two-step mode: "haan boliye" bolne ke baad agla poora phrase command hai. */
+    @Volatile
+    private var waitingForCommand = false
+
+    /** Wake partial + final dono se trigger ho sakta hai — duplicate block. */
     @Volatile
     private var wakeTriggered = false
 
@@ -61,10 +82,11 @@ class AssistantEngine(private val context: Context) {
         beep()
         status("AI: listening request...")
         wakeTriggered = false
+        waitingForCommand = false
         loop.startCommand()
     }
 
-    /** Text typed into the floating chat. */
+    /** Text typed into the floating chat / fallback popup. */
     fun handleText(text: String) {
         if (text.isNotBlank()) scope.launch { handleCommand(text.trim()) }
     }
@@ -88,35 +110,47 @@ class AssistantEngine(private val context: Context) {
         runCatching { context.sendBroadcast(i) }
     }
 
-    private suspend fun onHeard(text: String) {
-        if (loop.isCommand) {
-            handleCommand(text)
-            return
-        }
+    /**
+     * TWO-STEP mode: sirf wake word bola.
+     * "Haan boliye" TTS se poora bolne ke BAAD (UtteranceProgressListener onDone
+     * ke andar) 250ms delay ke saath fresh command session start hota hai —
+     * taaki MAD apni hi awaaz na sune aur user turant bol sakta hai.
+     */
+    private suspend fun onWakeWord(heard: String) {
         if (!prefs.getBoolean(MadSettings.KEY_WAKE_ENABLED, true)) return
-        if (wakeTriggered) return   // partial + final dono ne wake fire kiya ho to ek hi baar respond
-        // Fix: shared matcher — "hey mad", "himed", "hi med", "hey med", "heed",
-        // "hey mate", "a mad", "hey math", "mad", "हे मैड", "मैड" sab accept.
-        val wake = prefs.getString(MadSettings.KEY_WAKE, "hey mad")
-        if (MadSettings.matchesWake(text, wake)) {
-            wakeTriggered = true
-            loop.pause()
-            beep()
-            status("AI: wake word detected — $text")
-            tts.speak(WAKE_REPLY) { wakeTriggered = false; loop.startCommand() }
+        if (wakeTriggered) return   // partial + final duplicate wake block
+        wakeTriggered = true
+        loop.pause()
+        beep()
+        status("AI: wake word detected — $heard")
+        waitingForCommand = true
+        status("AI: waiting for command")
+        tts.speak(WAKE_REPLY) {
+            // Yahan UtteranceProgressListener ke onDone/onError ke andar se aaye hain —
+            // speech POORA khatam ho chuki hai. Ab 250ms ka gap do (mic settle +
+            // tail echo), phir FRESH command session start (Fix #2 lifecycle:
+            // cancel+destroy -> 300ms -> fresh; total ~550ms user ko natural lagta hai).
+            main.postDelayed({
+                wakeTriggered = false
+                if (waitingForCommand) loop.startCommand()
+            }, COMMAND_START_DELAY_AFTER_TTS_MS)
         }
     }
 
     /**
-     * Crash-safe reply flow: AI/skill/DB me koi bhi exception aaye to bhi MAD
-     * user ko error reply bolta hai aur listening resume karti hai — assistant
-     * kabhi permanently khamosh nahi reh jaata.
+     * Command flow (one-shot "hey mad <command>", two-step ka command session,
+     * manual tap, text input, fallback popup — sab isi se guzarte hain):
+     *  - WAITING_FOR_COMMAND reset, "You: <command>" display
+     *  - Gemini (saved provider/model/key) se reply, "MAD: <reply>" display
+     *  - TTS se reply bolo, POORA bolne ke baad background wake listening resume.
+     * Crash-safe: exception par bhi error reply bolo, listening resume karo.
      */
     private suspend fun handleCommand(text: String) {
+        waitingForCommand = false
         loop.pause()
-        status("AI: heard \"$text\"")
-        dao.addChat(ChatEntity(role = ROLE_USER, content = text))
+        status("You: $text")
         status("AI: thinking...")
+        dao.addChat(ChatEntity(role = ROLE_USER, content = text))
         val reply = try {
             decide(text)
         } catch (e: Exception) {
@@ -124,7 +158,7 @@ class AssistantEngine(private val context: Context) {
         }
         dao.addChat(ChatEntity(role = ROLE_MAD, content = reply))
         showBubble(reply)
-        status("AI: replied")
+        status("MAD: $reply")
         if (prefs.getBoolean(MadSettings.KEY_TTS_ENABLED, true)) {
             tts.speak(reply) {
                 status(if (prefs.getBoolean(MadSettings.KEY_WAKE_ENABLED, true)) "AI: idle — say hey mad" else "AI: idle")
@@ -211,5 +245,6 @@ class AssistantEngine(private val context: Context) {
         private const val ROLE_USER = "user"
         private const val ROLE_MAD = "mad"
         private const val WAKE_REPLY = "हाँ, बोलिए।"
+        private const val COMMAND_START_DELAY_AFTER_TTS_MS = 250L
     }
 }
