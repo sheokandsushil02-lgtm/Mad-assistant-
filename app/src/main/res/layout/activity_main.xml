@@ -50,6 +50,13 @@
             android:text="🎤 Tap to Speak" />
 
         <Button
+            android:id="@+id/btnFallbackMic"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="🛟 Fallback Google Voice Popup" />
+
+        <Button
             android:id="@+id/btnSettings"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
