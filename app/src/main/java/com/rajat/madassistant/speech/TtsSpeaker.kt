@@ -29,7 +29,7 @@ object MadSettings {
 
     /**
      * "Hey Mad" ke common Google-SpeechRecognizer transcription variants.
-     * Case-insensitive match — onPartialResults aur onResults dono me use hota hai.
+     * Case-insensitive match — wake detection (onResults) me use hota hai.
      */
     val WAKE_VARIANTS = listOf(
         "hey mad", "himed", "hi med", "hey med", "heed", "hey mate",
@@ -48,13 +48,14 @@ object MadSettings {
     }
 
     /**
-     * One-shot command: wake-word ke BAAD ka command text nikalta hai
-     * ("hey mad what is 2 plus 2" -> "what is 2 plus 2").
-     * Sirf wake word tha (koi extra shabd nahi) to null — two-step prompt chahiye.
+     * ONE-SHOT: wake-word ke BAAD ka command text nikalta hai
+     * ("hey mad what is 2 plus 2" -> "what is 2 plus 2";
+     *  "himed rems business kholo" -> "rems business kholo").
+     * Sirf wake word tha to EMPTY string — two-step "haan boliye" prompt chahiye.
      */
-    fun stripWakeCommand(text: String, customWake: String?): String? {
+    fun stripWake(text: String, customWake: String?): String {
         val t = text.trim()
-        if (t.isEmpty()) return null
+        if (t.isEmpty()) return ""
         val lower = t.lowercase()
 
         // Earliest match chuno (tie par longest) — taaki prefix sahi se strip ho.
@@ -69,11 +70,10 @@ object MadSettings {
         }
         if (!customWake.isNullOrBlank()) consider(customWake.trim().lowercase())
         for (v in WAKE_VARIANTS) consider(v)
-        if (bestIdx < 0) return null
+        if (bestIdx < 0) return ""
 
         return t.substring(bestIdx + bestLen)
             .trim(' ', '.', ',', '?', '!', ':', ';', '-', '।')
-            .ifBlank { null }
     }
 
     fun personaDefault(): String =
