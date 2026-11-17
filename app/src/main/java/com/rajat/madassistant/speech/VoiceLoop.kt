@@ -15,24 +15,28 @@ import android.speech.SpeechRecognizer
 /**
  * Always-on listening loop built on Android's built-in SpeechRecognizer.
  *
- * Fix #3 + wake variants:
- *  - Explicit Google RecognitionService ComponentName (googlequicksearchbox prefer)
- *    se bind — Android 14 par null component ka unpredictable resolver error 11 deta tha.
- *  - EXTRA_PREFER_OFFLINE=false (Google network engine) + EXTRA_PARTIAL_RESULTS=true.
- *  - Wake-word partials me bhi detect hota hai — MadSettings.matchesWake se saare
- *    "Hey Mad" transcription variants accept hote hain (himed, heed, hey mate...).
+ * Post-wake command flow (naya):
+ *  - ONE-SHOT ("hey mad <command>"): wake session ke FINAL result me wake ke
+ *    baad extra words milte hain to prefix strip karke seedha onCommand() fire
+ *    hota hai — "haan boliye" ka intezaar nahi, Gemini turant.
+ *  - TWO-STEP: sirf wake word bola → onWake() fire; ENGINE "haan boliye" bolta
+ *    hai aur TTS onDone + 250ms ke BAAD hi startCommand() se fresh command
+ *    session banata hai (WAITING_FOR_COMMAND state engine me).
+ *  - Wake trigger ab sirf FINAL result (onResults) se hota hai; partials sirf
+ *    console feedback hain — warna one-shot phrase beech me kat jaati thi
+ *    (pichla "haan boliye ke baad sunta nahi" bug isi se tha).
+ *  - Command mode me wake check NAHI hota — poora onResults text command hai.
  *
- * Manual-trigger lifecycle (Fix #2):
- *  - Tap to Speak / orb tap: background wake recognizer ko IMMEDIATELY cancel+destroy,
- *    300ms wait, phir FRESH foreground command session.
- *  - Command capture ya error par session CLEANLY destroy hota hai; background wake
- *    listening uske BAAD resume hoti hai (continuous wake-word toggle ON ho to).
+ * Manual-trigger lifecycle (Fix #2) + explicit Google service binding (Fix #3)
+ * + ERROR_RECOGNIZER_BUSY/CLIENT/SERVER_DISCONNECTED(11) destroy+recreate — sab pehle se hain.
  */
 class VoiceLoop(
     private val context: Context,
-    private val onHeard: (String) -> Unit
+    private val onWake: (String) -> Unit,
+    private val onCommand: (String) -> Unit
 ) {
 
+    /** WAITING_FOR_COMMAND / command session active — engine isi se flow decide karta hai. */
     @Volatile
     var isCommand = false
         private set
@@ -99,19 +103,17 @@ class VoiceLoop(
         override fun onEndOfSpeech() {}
 
         /**
-         * Wake-word partials me detect hota hai — user bolte hi MAD turant
-         * "haan boliye" ke liye ready ho jaata hai, final result ka wait nahi.
+         * Partials ab sirf console feedback hain — ACTION kabhi nahi.
+         * Pehle partial "hey mad" turant wake fire karta tha: user one-shot
+         * phrase ("hey mad what is 2 plus 2") bol raha hota to "haan boliye"
+         * beech me bol deti thi aur command words kat jaate the.
          */
         override fun onPartialResults(partialResults: Bundle?) {
-            if (stopped || isCommand) return
+            if (stopped) return
             val partial = partialResults
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull().orEmpty().trim()
-            if (partial.isEmpty()) return
-            if (MadSettings.matchesWake(partial, prefs.getString(MadSettings.KEY_WAKE, "hey mad"))) {
-                report("wake detected (partial): $partial")
-                onHeard(partial)
-            }
+            if (partial.isNotEmpty()) report("partial: $partial")
         }
 
         override fun onEvent(eventType: Int, params: Bundle?) {}
@@ -177,22 +179,34 @@ class VoiceLoop(
             val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             val text = list?.firstOrNull().orEmpty().trim()
 
+            // COMMAND MODE: wake check NAHI — poora text hi command hai.
+            // WAITING_FOR_COMMAND state engine handleCommand me reset hota hai.
             if (isCommand) {
-                // Command capture: session CLEANLY destroy karo.
-                // Background wake resume ENGINE karta hai (TTS bolne ke baad,
-                // wake toggle ON ho tab) — yahan se resume karne par MAD
-                // apni hi awaaz sun leta.
                 destroyRecognizer()
                 report(if (text.isEmpty()) "command captured (empty)" else "command captured")
-                if (text.isNotEmpty()) onHeard(text)
+                if (text.isNotEmpty()) onCommand(text)
                 return
             }
 
-            // Wake session final result: wake variant match par onHeard,
-            // warna loop chalta rahega (partial ne already trigger kiya ho to bhi harmless).
-            if (text.isNotEmpty() && MadSettings.matchesWake(text, prefs.getString(MadSettings.KEY_WAKE, "hey mad"))) {
-                report("wake detected: $text")
-                onHeard(text)
+            // WAKE MODE: final result me wake word check karo.
+            if (text.isNotEmpty()) {
+                val customWake = prefs.getString(MadSettings.KEY_WAKE, "hey mad")
+                if (MadSettings.matchesWake(text, customWake)) {
+                    // ONE-SHOT: wake ke baad extra words hain to prefix strip
+                    // karke seedha command — koi "haan boliye" nahi, koi wait nahi.
+                    val command = MadSettings.stripWake(text, customWake)
+                    destroyRecognizer()
+                    if (command.isNotBlank()) {
+                        report("one-shot command: $command")
+                        onCommand(command)
+                    } else {
+                        // TWO-STEP: sirf wake word — engine "haan boliye" bolega,
+                        // TTS onDone + 250ms baad startCommand() hoga.
+                        report("wake: $text")
+                        onWake(text)
+                    }
+                    return
+                }
             }
             restartAfter(250)
         }
@@ -204,8 +218,9 @@ class VoiceLoop(
     }
 
     /**
-     * Fix #2: Tap to Speak / orb tap — background wake listener IMMEDIATELY
-     * cancel+destroy, 300ms wait, phir FRESH foreground command session.
+     * Fix #2: manual tap / post-wake command session — purana recognizer
+     * IMMEDIATELY cancel+destroy, 300ms wait, phir FRESH command session.
+     * (Engine ise TTS "haan boliye" ke onDone + 250ms ke baad call karta hai.)
      */
     fun startCommand() {
         isCommand = true
@@ -271,7 +286,7 @@ class VoiceLoop(
             recognizer = it
         }
         try {
-            sr.startListening(listenIntent())
+            sr.startListening(listenIntent(isCommand))
         } catch (_: Exception) {
             report("start failed — recreating recognizer")
             destroyRecognizer()
@@ -332,21 +347,33 @@ class VoiceLoop(
         else -> "UNKNOWN($error)"
     }
 
-    private fun listenIntent(): Intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-        // Language mode Settings se live — restart nahi chahiye
-        val lang = prefs.getString(MadSettings.KEY_LANG, "hinglish") ?: "hinglish"
-        val loc = if (lang == "english") "en-IN" else "hi-IN"
+    /**
+     * Command mode me chhote silence timeouts (user chhota command bolega, jaldi
+     * finalize ho), wake mode me lambe (background continuously sunta rahe).
+     */
+    private fun listenIntent(commandMode: Boolean): Intent =
+        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            val lang = prefs.getString(MadSettings.KEY_LANG, "hinglish") ?: "hinglish"
+            val loc = if (lang == "english") "en-IN" else "hi-IN"
 
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE, loc)
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, loc)
-        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)   // Fix #3: partials for wake detection
-        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)   // Fix #3: Google network engine
-        putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
-        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        putExtra("android.speech.extras.SPEECH_INPUT_COMPLETE_SILENCE_THRESHOLD_MILLIS", 10000)
-        putExtra("android.speech.extras.SPEECH_INPUT_MINIMUM_LENGTH_MILLIS", 10000)
-    }
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, loc)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, loc)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)   // console feedback
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)   // Google network engine
+            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+
+            if (commandMode) {
+                // Command session: bolna khatam + 2.5s silence par finalize —
+                // wake session ke 10s lambe timeouts se reply turant milta hai.
+                putExtra("android.speech.extras.SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS", 2500L)
+                putExtra("android.speech.extras.SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS", 2000L)
+            } else {
+                putExtra("android.speech.extras.SPEECH_INPUT_COMPLETE_SILENCE_THRESHOLD_MILLIS", 10000)
+                putExtra("android.speech.extras.SPEECH_INPUT_MINIMUM_LENGTH_MILLIS", 10000)
+            }
+        }
 
     companion object {
         /**
