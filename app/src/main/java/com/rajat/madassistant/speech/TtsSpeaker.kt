@@ -39,7 +39,14 @@ object MadEvents {
     const val EXTRA_TEXT = "text"
 }
 
-/** Google TTS + natural hi-IN/en-IN network/HD voice selection. */
+/**
+ * Natural human voice TTS:
+ *  - Google engine (com.google.android.tts) forced; missing/fail hone par default engine fallback.
+ *  - hi-IN/en-IN network/HD voices (hie-network/hid-network, QUALITY_VERY_HIGH/HIGH) auto-preferred.
+ *  - Init complete hone se PEHLE request aaye to speech queue ho jaati hai — pehla
+ *    reply drop nahi hota ("not ready — speech dropped" bug fix).
+ *  - Pitch 1.0 / rate 0.95 defaults — robotic feel khatam.
+ */
 class TtsSpeaker(private val context: Context) {
 
     private var tts: TextToSpeech? = null
@@ -51,6 +58,10 @@ class TtsSpeaker(private val context: Context) {
     var lastStatus: String = "idle"
         private set
 
+    /** Init complete hone tak aayi hui speech (text + onDone callback). */
+    private var pending: Pair<String, (() -> Unit)?>? = null
+    private var triedFallbackEngine = false
+
     private fun report(s: String) {
         lastStatus = s
         val i = Intent(MadEvents.STATUS).setPackage(context.packageName)
@@ -60,13 +71,50 @@ class TtsSpeaker(private val context: Context) {
 
     fun start() {
         if (tts != null) return
+        triedFallbackEngine = false
         report("init Google TTS...")
         tts = TextToSpeech(context, { status ->
             ready = status == TextToSpeech.SUCCESS
-            if (ready) applyVoice() else report("init failed (err $status)")
+            if (ready) {
+                applyVoice()
+                flushPending()
+            } else {
+                onInitFailed()
+            }
         }, GOOGLE_TTS_ENGINE)
     }
 
+    /** Google engine na ho to system default engine se ek baar retry. */
+    private fun onInitFailed() {
+        if (!triedFallbackEngine) {
+            triedFallbackEngine = true
+            report("Google TTS engine fail — default engine se try...")
+            tts = null
+            tts = TextToSpeech(context) { status ->
+                ready = status == TextToSpeech.SUCCESS
+                if (ready) {
+                    applyVoice()
+                    flushPending()
+                } else {
+                    ready = false
+                    report("init failed (err $status)")
+                    flushPending()
+                }
+            }
+        } else {
+            report("init failed")
+            flushPending()
+        }
+    }
+
+    private fun flushPending() {
+        val p = pending ?: return
+        pending = null
+        if (ready) speak(p.first, p.second)
+        else main.post { p.second?.invoke() }
+    }
+
+    /** Settings Save ke baad service ise bulata hai — naye voice turant lag jaate hain. */
     fun reload() = applyVoice()
 
     private fun applyVoice() {
@@ -77,7 +125,7 @@ class TtsSpeaker(private val context: Context) {
         val wanted = when (lang) {
             "english" -> listOf(Locale("en", "IN"), Locale("en", "US"), Locale.US)
             "hindi" -> listOf(Locale("hi", "IN"))
-            else -> listOf(Locale("hi", "IN"), Locale("en", "IN"))
+            else -> listOf(Locale("hi", "IN"), Locale("en", "IN")) // hinglish
         }
         val locale = wanted.firstOrNull { l ->
             val r = runCatching { engine.isLanguageAvailable(l) }.getOrNull()
@@ -101,6 +149,7 @@ class TtsSpeaker(private val context: Context) {
         report("ready — ${voice?.name ?: "default"} ($locale)")
     }
 
+    /** hi-IN / en-IN me sabse natural (network/HD/VERY_HIGH) voice chunta hai. */
     private fun pickVoice(all: List<Voice>, primary: Locale): Voice? {
         if (all.isEmpty()) return null
         val pool = all.filter {
@@ -108,11 +157,13 @@ class TtsSpeaker(private val context: Context) {
                 it.locale.language == primary.language
         }.ifEmpty { all }
 
+        // a) Settings dropdown se exact selected voice
         val saved = prefs.getString(MadSettings.KEY_VOICE_NAME, null).orEmpty()
         if (saved.isNotBlank()) {
             pool.firstOrNull { it.name.equals(saved, ignoreCase = true) }?.let { return it }
         }
 
+        // b) Gender preference (Google TTS voice-name patterns)
         val gender = prefs.getString(MadSettings.KEY_VOICE_GENDER, "system") ?: "system"
         if (gender != "system") {
             val patterns = if (gender == "male") {
@@ -120,9 +171,11 @@ class TtsSpeaker(private val context: Context) {
             } else {
                 listOf("x-ihc", "x-fnf", "x-sfg", "x-ced", "x-kla", "#female")
             }
-            pool.firstOrNull { voice -> patterns.any { voice.name.lowercase(Locale.ROOT).contains(it) } }
+            pool.firstOrNull { v -> patterns.any { v.name.lowercase(Locale.ROOT).contains(it) } }
                 ?.let { return it }
         }
+
+        // c) Quality scoring: network voices (hie-network/hid-network) top pe
         return pool.maxByOrNull { voiceScore(it) }
     }
 
@@ -141,7 +194,14 @@ class TtsSpeaker(private val context: Context) {
         return s
     }
 
+    /** Speaks the text, then invokes [onDone] on the main thread. */
     fun speak(text: String, onDone: (() -> Unit)? = null) {
+        // Engine abhi initialize ho raha hai: speech QUEUE karo — drop nahi.
+        if (!ready && tts != null) {
+            report("queued (init in progress)")
+            pending = text to onDone
+            return
+        }
         if (!ready || tts == null) {
             report("not ready — speech dropped")
             main.post { onDone?.invoke() }
@@ -157,6 +217,7 @@ class TtsSpeaker(private val context: Context) {
                     main.post { onDone?.invoke() }
                 }
             }
+
             @Deprecated("Deprecated in Java")
             override fun onError(utteranceId: String?) {
                 if (utteranceId == id) {
@@ -172,9 +233,11 @@ class TtsSpeaker(private val context: Context) {
         try {
             tts?.stop()
             tts?.shutdown()
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
         tts = null
         ready = false
+        pending = null
         report("stopped")
     }
 
