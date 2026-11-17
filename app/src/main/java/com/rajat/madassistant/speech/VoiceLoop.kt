@@ -1,24 +1,32 @@
 package com.rajat.madassistant.speech
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 
 /**
  * Always-on listening loop built on Android's built-in SpeechRecognizer.
  *
+ * Fix #3 + wake variants:
+ *  - Explicit Google RecognitionService ComponentName (googlequicksearchbox prefer)
+ *    se bind — Android 14 par null component ka unpredictable resolver error 11 deta tha.
+ *  - EXTRA_PREFER_OFFLINE=false (Google network engine) + EXTRA_PARTIAL_RESULTS=true.
+ *  - Wake-word partials me bhi detect hota hai — MadSettings.matchesWake se saare
+ *    "Hey Mad" transcription variants accept hote hain (himed, heed, hey mate...).
+ *
  * Manual-trigger lifecycle (Fix #2):
  *  - Tap to Speak / orb tap: background wake recognizer ko IMMEDIATELY cancel+destroy,
- *    300ms wait (Google service purana session release kare), phir FRESH foreground
- *    command session — isliye ERROR_RECOGNIZER_BUSY / SERVER_DISCONNECTED nahi aata.
+ *    300ms wait, phir FRESH foreground command session.
  *  - Command capture ya error par session CLEANLY destroy hota hai; background wake
  *    listening uske BAAD resume hoti hai (continuous wake-word toggle ON ho to).
- *  - Session counter: purani session ke pending restarts naye session ko disturb nahi karte.
  */
 class VoiceLoop(
     private val context: Context,
@@ -48,11 +56,36 @@ class VoiceLoop(
 
     private val prefs = context.getSharedPreferences(MadSettings.PREFS, Context.MODE_PRIVATE)
 
+    /** Fix #3: resolved Google recognition service — null component kabhi pass nahi hota. */
+    @Volatile
+    private var serviceComponent: ComponentName? = null
+
     private fun report(s: String) {
         lastStatus = s
         val i = Intent(MadEvents.STATUS).setPackage(context.packageName)
             .putExtra(MadEvents.EXTRA_TEXT, "Mic: $s")
         runCatching { context.sendBroadcast(i) }
+    }
+
+    /**
+     * Fix #3: active RecognitionService dhundo — googlequicksearchbox (Google app) pehle
+     * prefer, fir com.google.android.tts. Na mile to pehla available service.
+     */
+    private fun resolveRecognitionService(): ComponentName? {
+        val pm = context.packageManager
+        val resolved = runCatching {
+            pm.queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), PackageManager.MATCH_ALL)
+        }.getOrNull().orEmpty()
+        if (resolved.isEmpty()) return null
+
+        for (pkg in PREFERRED_RECOGNITION_PACKAGES) {
+            resolved.firstOrNull { it.serviceInfo?.packageName == pkg }?.let { ri ->
+                val si = ri.serviceInfo
+                return ComponentName(si.packageName, si.name)
+            }
+        }
+        val si = resolved.first().serviceInfo ?: return null
+        return ComponentName(si.packageName, si.name)
     }
 
     private val listener = object : RecognitionListener {
@@ -65,7 +98,21 @@ class VoiceLoop(
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() {}
 
-        override fun onPartialResults(partialResults: Bundle?) {}
+        /**
+         * Wake-word partials me detect hota hai — user bolte hi MAD turant
+         * "haan boliye" ke liye ready ho jaata hai, final result ka wait nahi.
+         */
+        override fun onPartialResults(partialResults: Bundle?) {
+            if (stopped || isCommand) return
+            val partial = partialResults
+                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                ?.firstOrNull().orEmpty().trim()
+            if (partial.isEmpty()) return
+            if (MadSettings.matchesWake(partial, prefs.getString(MadSettings.KEY_WAKE, "hey mad"))) {
+                report("wake detected (partial): $partial")
+                onHeard(partial)
+            }
+        }
 
         override fun onEvent(eventType: Int, params: Bundle?) {}
 
@@ -141,7 +188,12 @@ class VoiceLoop(
                 return
             }
 
-            if (text.isNotEmpty()) onHeard(text)
+            // Wake session final result: wake variant match par onHeard,
+            // warna loop chalta rahega (partial ne already trigger kiya ho to bhi harmless).
+            if (text.isNotEmpty() && MadSettings.matchesWake(text, prefs.getString(MadSettings.KEY_WAKE, "hey mad"))) {
+                report("wake detected: $text")
+                onHeard(text)
+            }
             restartAfter(250)
         }
     }
@@ -215,8 +267,7 @@ class VoiceLoop(
             restartAfter(5000)
             return
         }
-        val sr = recognizer ?: SpeechRecognizer.createSpeechRecognizer(context).also {
-            it.setRecognitionListener(listener)
+        val sr = recognizer ?: createRecognizer().also {
             recognizer = it
         }
         try {
@@ -226,6 +277,21 @@ class VoiceLoop(
             destroyRecognizer()
             restartAfter(500)
         }
+    }
+
+    /** Fix #3: explicit ComponentName ke saath fresh recognizer (Google service prefer). */
+    private fun createRecognizer(): SpeechRecognizer {
+        if (serviceComponent == null) serviceComponent = resolveRecognitionService()
+        val component = serviceComponent
+        val sr = if (component != null) {
+            report("binding ${component.packageName}")
+            SpeechRecognizer.createSpeechRecognizer(context, component)
+        } else {
+            report("binding system default service")
+            SpeechRecognizer.createSpeechRecognizer(context)
+        }
+        sr.setRecognitionListener(listener)
+        return sr
     }
 
     private fun restartAfter(delay: Long) {
@@ -274,6 +340,8 @@ class VoiceLoop(
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, loc)
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, loc)
+        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)   // Fix #3: partials for wake detection
+        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)   // Fix #3: Google network engine
         putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         putExtra("android.speech.extras.SPEECH_INPUT_COMPLETE_SILENCE_THRESHOLD_MILLIS", 10000)
@@ -290,5 +358,11 @@ class VoiceLoop(
 
         /** Fix #2: manual tap par purana session chhodne se pehle Google service ko itna ms milta hai. */
         private const val COMMAND_START_DELAY_MS = 300L
+
+        /** Fix #3: Google services is order me prefer hote hain. */
+        private val PREFERRED_RECOGNITION_PACKAGES = listOf(
+            "com.google.android.googlequicksearchbox",
+            "com.google.android.tts"
+        )
     }
 }
