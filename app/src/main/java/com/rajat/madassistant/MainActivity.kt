@@ -167,6 +167,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Voice/language setting turant running assistant par apply karo — Save ka wait nahi. */
+    private fun applyVoiceSettingsLive() {
+        if (AssistantForegroundService.isRunning) {
+            startService(Intent(this, AssistantForegroundService::class.java)
+                .setAction(AssistantForegroundService.ACTION_RELOAD))
+        }
+    }
+
     // ================= SETTINGS DASHBOARD =================
 
     private fun showSettingsDialog() {
@@ -287,6 +295,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 prefs.edit().putString(MadSettings.KEY_VOICE_GENDER, v).apply()
                 genderButton.text = "Voice: " + prettyGender(v)
+                applyVoiceSettingsLive()
             }
         }
         root.addView(genderButton)
@@ -307,7 +316,7 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit().putString(MadSettings.KEY_PITCH, "%.2f".format((p + 70) / 100f)).apply()
             }
             override fun onStartTrackingTouch(b: SeekBar?) {}
-            override fun onStopTrackingTouch(b: SeekBar?) {}
+            override fun onStopTrackingTouch(b: SeekBar?) { applyVoiceSettingsLive() }
         })
         root.addView(pitchBar)
 
@@ -320,7 +329,7 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit().putString(MadSettings.KEY_RATE, "%.2f".format((p + 70) / 100f)).apply()
             }
             override fun onStartTrackingTouch(b: SeekBar?) {}
-            override fun onStopTrackingTouch(b: SeekBar?) {}
+            override fun onStopTrackingTouch(b: SeekBar?) { applyVoiceSettingsLive() }
         })
         root.addView(rateBar)
 
@@ -336,6 +345,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 prefs.edit().putString(MadSettings.KEY_LANG, v).apply()
                 langButton.text = "Language: " + prettyLang(v)
+                applyVoiceSettingsLive()
             }
         }
         root.addView(langButton)
@@ -347,6 +357,7 @@ class MainActivity : AppCompatActivity() {
                 .putString(MadSettings.KEY_PROVIDER, selectedProvider)
                 .putString(MadSettings.KEY_MODEL, AiBrainClient.normalizeModel(selectedModel))
                 .apply()
+            applyVoiceSettingsLive()
             val i = Intent(this, AssistantForegroundService::class.java).setAction(AssistantForegroundService.ACTION_TEST_VOICE)
             if (AssistantForegroundService.isRunning) startService(i) else Toast.makeText(this, "Pehle assistant Start karo", Toast.LENGTH_SHORT).show()
         }
@@ -386,10 +397,7 @@ class MainActivity : AppCompatActivity() {
                     .putString(MadSettings.KEY_PERSONA, personaInput.text.toString().trim().ifBlank { MadSettings.personaDefault() })
                     .apply()
                 // Running service ko naye settings turant reload karo (restart nahi chahiye)
-                if (AssistantForegroundService.isRunning) {
-                    startService(Intent(this, AssistantForegroundService::class.java)
-                        .setAction(AssistantForegroundService.ACTION_RELOAD))
-                }
+                applyVoiceSettingsLive()
                 statusText.setText(R.string.status_key_saved)
                 refreshRunState()
             }
@@ -421,6 +429,7 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit().putString(MadSettings.KEY_VOICE_NAME, chosen.name).apply()
                 voiceButton.text = "Engine Voice: " + chosen.name
             }
+            applyVoiceSettingsLive()
         }
     }
 
