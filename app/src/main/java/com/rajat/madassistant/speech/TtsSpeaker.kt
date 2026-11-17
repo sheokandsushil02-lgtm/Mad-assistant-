@@ -29,7 +29,7 @@ object MadSettings {
 
     /**
      * "Hey Mad" ke common Google-SpeechRecognizer transcription variants.
-     * Case-insensitive substring match — onPartialResults aur onResults dono me use hota hai.
+     * Case-insensitive substring match — wake detection final results me use hota hai.
      */
     val WAKE_VARIANTS = listOf(
         "hey mad", "himed", "hi med", "hey med", "heed", "hey mate",
@@ -42,6 +42,34 @@ object MadSettings {
         if (t.isEmpty()) return false
         if (!customWake.isNullOrBlank() && t.contains(customWake.trim().lowercase())) return true
         return WAKE_VARIANTS.any { t.contains(it) }
+    }
+
+    /**
+     * One-shot commands: wake word (longest matched variant) hata ke baaki
+     * command text return karta hai.
+     * "hey mad what is 2 plus 2" -> "what is 2 plus 2"
+     * "himed rems business kholo" -> "rems business kholo"
+     * Sirf wake word bola -> khaali string (two-step mode).
+     */
+    fun stripWake(text: String, customWake: String?): String {
+        val lower = text.lowercase()
+        val candidates = buildList {
+            if (!customWake.isNullOrBlank()) add(customWake.trim().lowercase())
+            addAll(WAKE_VARIANTS)
+        }
+        var bestIdx = -1
+        var bestLen = 0
+        for (v in candidates) {
+            val i = lower.indexOf(v)
+            if (i >= 0 && v.length > bestLen) {
+                bestIdx = i
+                bestLen = v.length
+            }
+        }
+        if (bestIdx < 0) return text.trim()
+        return text.substring(bestIdx + bestLen)
+            .trim(' ', ',', '.', '!', '?', ':', '-', '—')
+            .trim()
     }
 
     fun personaDefault(): String =
@@ -211,7 +239,11 @@ class TtsSpeaker(private val context: Context) {
         return s
     }
 
-    /** Speaks the text, then invokes [onDone] on the main thread. */
+    /**
+     * Speaks the text, then invokes [onDone] on the main thread — onDone SIRF
+     * UtteranceProgressListener ke andar (onDone/onError) se fire hota hai,
+     * yani speech POORA bolne ke baad hi. Post-wake command flow isi par depend karta hai.
+     */
     fun speak(text: String, onDone: (() -> Unit)? = null) {
         // Engine abhi initialize ho raha hai: speech QUEUE karo — drop nahi.
         if (!ready && tts != null) {
