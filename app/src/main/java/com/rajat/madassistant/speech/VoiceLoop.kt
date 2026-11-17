@@ -12,11 +12,12 @@ import android.speech.SpeechRecognizer
 /**
  * Always-on listening loop built on Android's built-in SpeechRecognizer.
  *
- * ERROR_RECOGNIZER_BUSY / ERROR_CLIENT (Google app ke known deadlocks) par
- * recognizer instance ko destroy + recreate kiya jaata hai (500ms delay ke
- * saath) — isse assistant "sunna band kar deta" bug fix hota hai.
- * NO_MATCH / SPEECH_TIMEOUT par soft-restart, aur sab kuch "Mic: ..." debug
- * broadcasts karta hai.
+ * Fixes:
+ *  - ERROR_RECOGNIZER_BUSY / ERROR_CLIENT par recognizer destroy + recreate (500ms).
+ *  - Tap to Speak / orb tap: purani LIVE session par startListening() call karna
+ *    ERROR_RECOGNIZER_BUSY deta tha — ab har manual trigger FRESH recognizer instance
+ *    banata hai, isliye listening turant shuru hoti hai.
+ *  - Session counter: purani session ke pending restarts naye session ko disturb nahi karte.
  */
 class VoiceLoop(
     private val context: Context,
@@ -40,6 +41,9 @@ class VoiceLoop(
 
     private var recognizer: SpeechRecognizer? = null
     private val main = Handler(Looper.getMainLooper())
+
+    /** Har start* naya session id banata hai — stale restart callbacks cancel ho jaate hain. */
+    private var session = 0
 
     private fun report(s: String) {
         lastStatus = s
@@ -97,15 +101,26 @@ class VoiceLoop(
 
     fun startWake() {
         isCommand = false
-        paused = false
-        stopped = false
-        startListening()
+        beginSession()
     }
 
     fun startCommand() {
         isCommand = true
+        beginSession()
+    }
+
+    /**
+     * Naya listening session: purani session ke saare pending restarts cancel,
+     * purana recognizer destroy (live instance pe startListening() BUSY deta hai),
+     * phir FRESH instance turant start — tap ka response instant.
+     */
+    private fun beginSession() {
         paused = false
         stopped = false
+        session++
+        main.removeCallbacksAndMessages(null)
+        destroyRecognizer()
+        report(if (isCommand) "starting (command)" else "starting (wake)")
         startListening()
     }
 
@@ -121,6 +136,8 @@ class VoiceLoop(
     fun stop() {
         stopped = true
         paused = true
+        session++
+        main.removeCallbacksAndMessages(null)
         destroyRecognizer()
         report("idle (stopped)")
     }
@@ -129,7 +146,7 @@ class VoiceLoop(
         if (paused || stopped) return
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
             report("speech service missing — retry in 5s")
-            main.postDelayed({ startListening() }, 5000)
+            restartAfter(5000)
             return
         }
         val sr = recognizer ?: SpeechRecognizer.createSpeechRecognizer(context).also {
@@ -141,12 +158,13 @@ class VoiceLoop(
         } catch (_: Exception) {
             report("start failed — recreating recognizer")
             destroyRecognizer()
-            restartAfter(1000)
+            restartAfter(500)
         }
     }
 
     private fun restartAfter(delay: Long) {
-        main.postDelayed({ if (!paused && !stopped) startListening() }, delay)
+        val my = session
+        main.postDelayed({ if (my == session && !paused && !stopped) startListening() }, delay)
     }
 
     private fun destroyRecognizer() {
