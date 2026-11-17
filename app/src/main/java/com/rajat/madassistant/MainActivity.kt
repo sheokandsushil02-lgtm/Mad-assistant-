@@ -14,6 +14,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
@@ -25,6 +27,7 @@ import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -47,12 +50,32 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSelectTarget: Button
     private lateinit var btnStart: Button
     private lateinit var btnMic: Button
+    private lateinit var btnFallbackMic: Button
     private lateinit var btnSettings: Button
     private lateinit var targetAppManager: TargetAppManager
 
     private var selectedProvider: String = AiBrainClient.defaultProvider()
     private var selectedModel: String = AiBrainClient.defaultModel(AiBrainClient.defaultProvider())
     private var fetchedModels: List<String> = emptyList()
+
+    /** Fix #3: Fallback Google Voice Popup — background recognition disconnect ho to instant backup. */
+    private val speechPopupLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val text = result.data
+                ?.getStringArrayListExtra(SpeechRecognizer.RESULTS_RECOGNITION)
+                ?.firstOrNull()?.trim().orEmpty()
+            if (text.isNotEmpty()) {
+                aiStatus.text = "AI: heard \"$text\" (popup)"
+                startService(
+                    Intent(this, AssistantForegroundService::class.java)
+                        .setAction(AssistantForegroundService.ACTION_HANDLE_TEXT)
+                        .putExtra(AssistantForegroundService.EXTRA_TEXT, text)
+                )
+            }
+        }
+    }
 
     /** Live status receiver — engine yahi se live Mic/AI/TTS + "Heard:..." bhejta hai. */
     private val statusReceiver = object : BroadcastReceiver() {
@@ -86,6 +109,7 @@ class MainActivity : AppCompatActivity() {
         btnSelectTarget = findViewById(R.id.btnSelectTarget)
         btnStart = findViewById(R.id.btnStart)
         btnMic = findViewById(R.id.btnMic)
+        btnFallbackMic = findViewById(R.id.btnFallbackMic)
         btnSettings = findViewById(R.id.btnSettings)
         targetAppManager = TargetAppManager(this)
 
@@ -102,6 +126,25 @@ class MainActivity : AppCompatActivity() {
             } else {
                 Toast.makeText(this, "Pehle Start Assistant dabao", Toast.LENGTH_SHORT).show()
             }
+        }
+        // Fix #3: Fallback Google Voice Popup — background recognition kabhi
+        // disconnect ho to yeh button Google ka apna voice dialog kholta hai.
+        btnFallbackMic.setOnClickListener {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(
+                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                )
+                val lang = getSharedPreferences(MadSettings.PREFS, MODE_PRIVATE)
+                    .getString(MadSettings.KEY_LANG, "hinglish") ?: "hinglish"
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, if (lang == "english") "en-IN" else "hi-IN")
+                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            }
+            runCatching { speechPopupLauncher.launch(intent) }
+                .onFailure {
+                    Toast.makeText(this, "Google voice app missing / ActivityNotFoundException", Toast.LENGTH_SHORT).show()
+                }
         }
         updateTargetLabel()
         refreshRunState()
@@ -371,6 +414,7 @@ class MainActivity : AppCompatActivity() {
             setSingleLine()
         }
         root.addView(wakeInput)
+        root.addView(hint("Wake matching me ye variants automatically accept hote hain: himed, hi med, hey med, heed, hey mate, a mad, hey math, mad, मैड"))
         root.addView(toggle("Continuous Wake-Word Listening", MadSettings.KEY_WAKE_ENABLED, true))
         root.addView(toggle("Voice Reply (TTS)", MadSettings.KEY_TTS_ENABLED, true))
         root.addView(toggle("Beep on Wake", MadSettings.KEY_BEEP_ENABLED, true))
