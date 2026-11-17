@@ -100,12 +100,21 @@ class AssistantEngine(private val context: Context) {
         }
     }
 
+    /**
+     * Crash-safe reply flow: AI/skill/DB me koi bhi exception aaye to bhi MAD
+     * user ko error reply bolta hai aur listening resume karti hai — assistant
+     * kabhi permanently khamosh nahi reh jaata.
+     */
     private suspend fun handleCommand(text: String) {
         loop.pause()
         status("AI: heard \"$text\"")
         dao.addChat(ChatEntity(role = ROLE_USER, content = text))
         status("AI: thinking...")
-        val reply = decide(text)
+        val reply = try {
+            decide(text)
+        } catch (e: Exception) {
+            "Sorry, kuch gadbad ho gayi. ${e.message?.take(60).orEmpty().ifBlank { "Dobara boliye." }}"
+        }
         dao.addChat(ChatEntity(role = ROLE_MAD, content = reply))
         showBubble(reply)
         status("AI: replied")
@@ -128,10 +137,16 @@ class AssistantEngine(private val context: Context) {
         return when {
             t.contains("याद रख") || t.contains("remember") -> remember(text)
             t.contains("क्या याद") || t.contains("याद है") || t.contains("what do you remember") -> recall()
-            reminders.handle(text) != null -> reminders.handle(text)!!
-            phoneSkills.handle(text) != null -> phoneSkills.handle(text)!!
-            t.contains("खोल") || (t.contains("open") && (t.contains("app") || t.contains("target"))) -> openTargetApp()
-            else -> askBrain(text)
+            else -> {
+                // Ek hi baar call karo — pehle handle() se result lo, null ho to agla skill try karo.
+                // (Pehle condition+value se 2 baar call hota tha — reminder DOUBLE ban sakta tha.)
+                val reminderReply = runCatching { reminders.handle(text) }.getOrNull()
+                if (reminderReply != null) return reminderReply
+                val skillReply = runCatching { phoneSkills.handle(text) }.getOrNull()
+                if (skillReply != null) return skillReply
+                if (t.contains("खोल") || (t.contains("open") && (t.contains("app") || t.contains("target")))) openTargetApp()
+                else askBrain(text)
+            }
         }
     }
 
