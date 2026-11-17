@@ -27,6 +27,23 @@ object MadSettings {
     const val KEY_BEEP_ENABLED = "beep_enabled"
     const val KEY_PERSONA = "persona"
 
+    /**
+     * "Hey Mad" ke common Google-SpeechRecognizer transcription variants.
+     * Case-insensitive substring match — onPartialResults aur onResults dono me use hota hai.
+     */
+    val WAKE_VARIANTS = listOf(
+        "hey mad", "himed", "hi med", "hey med", "heed", "hey mate",
+        "a mad", "hey math", "mad", "हे मैड", "मैड", "मद"
+    )
+
+    /** Wake-word match: custom wake word (Settings) + saare transcription variants. */
+    fun matchesWake(text: String, customWake: String?): Boolean {
+        val t = text.trim().lowercase()
+        if (t.isEmpty()) return false
+        if (!customWake.isNullOrBlank() && t.contains(customWake.trim().lowercase())) return true
+        return WAKE_VARIANTS.any { t.contains(it) }
+    }
+
     fun personaDefault(): String =
         "You are MAD — Sushil ka personal AI assistant (Jarvis/Maya/Lia style). " +
             "Sushil ki business REMS Business hai (electrical, welding, DJ aur Khata management). " +
