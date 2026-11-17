@@ -13,7 +13,9 @@ import android.speech.SpeechRecognizer
  * Always-on listening loop built on Android's built-in SpeechRecognizer.
  *
  * Fixes:
- *  - ERROR_RECOGNIZER_BUSY / ERROR_CLIENT par recognizer destroy + recreate (500ms).
+ *  - ERROR_RECOGNIZER_BUSY / ERROR_CLIENT / ERROR_SERVER_DISCONNECTED (11) par
+ *    recognizer destroy + recreate (500ms) — server disconnect hone par soft
+ *    restart kaam nahi karta, NAYA instance hi chahiye.
  *  - Tap to Speak / orb tap: purani LIVE session par startListening() call karna
  *    ERROR_RECOGNIZER_BUSY deta tha — ab har manual trigger FRESH recognizer instance
  *    banata hai, isliye listening turant shuru hoti hai.
@@ -70,10 +72,12 @@ class VoiceLoop(
             if (stopped) return
             val name = errName(error)
             when (error) {
-                // Google recognizer ke fatal errors — soft restart kaam nahi karta:
-                // purana instance destroy karke NAYA instance banao (500ms baad).
+                // Fatal errors — soft restart kaam nahi karta: server disconnect ho
+                // chuka hai ya client busy hai. PURANA instance destroy karke NAYA
+                // instance banao (500ms baad).
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
-                SpeechRecognizer.ERROR_CLIENT -> {
+                SpeechRecognizer.ERROR_CLIENT,
+                ERR_SERVER_DISCONNECTED -> {
                     report("error $name — recreating recognizer")
                     destroyRecognizer()
                     restartAfter(500)
@@ -195,6 +199,7 @@ class VoiceLoop(
         SpeechRecognizer.ERROR_NO_MATCH -> "NO_MATCH"
         SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "RECOGNIZER_BUSY"
         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "INSUFFICIENT_PERMISSIONS"
+        ERR_SERVER_DISCONNECTED -> "SERVER_DISCONNECTED"
         else -> "UNKNOWN($error)"
     }
 
@@ -212,5 +217,14 @@ class VoiceLoop(
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         putExtra("android.speech.extras.SPEECH_INPUT_COMPLETE_SILENCE_THRESHOLD_MILLIS", 10000)
         putExtra("android.speech.extras.SPEECH_INPUT_MINIMUM_LENGTH_MILLIS", 10000)
+    }
+
+    companion object {
+        /**
+         * SpeechRecognizer.ERROR_SERVER_DISCONNECTED — API 31 me add hua tha; constant
+         * ko directly reference karne se minSdk < 31 devices par compile theek chalta hai
+         * (value inline ho jaati hai), par safe rahne ke liye literal 11 use kar rahe hain.
+         */
+        private const val ERR_SERVER_DISCONNECTED = 11
     }
 }
