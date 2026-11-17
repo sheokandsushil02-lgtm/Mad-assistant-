@@ -29,7 +29,7 @@ object MadSettings {
 
     /**
      * "Hey Mad" ke common Google-SpeechRecognizer transcription variants.
-     * Case-insensitive substring match — wake detection final results me use hota hai.
+     * Case-insensitive match — onPartialResults aur onResults dono me use hota hai.
      */
     val WAKE_VARIANTS = listOf(
         "hey mad", "himed", "hi med", "hey med", "heed", "hey mate",
@@ -41,35 +41,39 @@ object MadSettings {
         val t = text.trim().lowercase()
         if (t.isEmpty()) return false
         if (!customWake.isNullOrBlank() && t.contains(customWake.trim().lowercase())) return true
-        return WAKE_VARIANTS.any { t.contains(it) }
+        // "mad" ko word-boundary se match karo — warna "made"/"madam" me substring
+        // false wake-trigger ho jaata hai. Baaki variants substring se theek hain.
+        if (WAKE_VARIANTS.any { it != "mad" && t.contains(it) }) return true
+        return t.split(Regex("[^\\p{L}\\p{N}]+")).any { it == "mad" }
     }
 
     /**
-     * One-shot commands: wake word (longest matched variant) hata ke baaki
-     * command text return karta hai.
-     * "hey mad what is 2 plus 2" -> "what is 2 plus 2"
-     * "himed rems business kholo" -> "rems business kholo"
-     * Sirf wake word bola -> khaali string (two-step mode).
+     * One-shot command: wake-word ke BAAD ka command text nikalta hai
+     * ("hey mad what is 2 plus 2" -> "what is 2 plus 2").
+     * Sirf wake word tha (koi extra shabd nahi) to null — two-step prompt chahiye.
      */
-    fun stripWake(text: String, customWake: String?): String {
-        val lower = text.lowercase()
-        val candidates = buildList {
-            if (!customWake.isNullOrBlank()) add(customWake.trim().lowercase())
-            addAll(WAKE_VARIANTS)
-        }
+    fun stripWakeCommand(text: String, customWake: String?): String? {
+        val t = text.trim()
+        if (t.isEmpty()) return null
+        val lower = t.lowercase()
+
+        // Earliest match chuno (tie par longest) — taaki prefix sahi se strip ho.
         var bestIdx = -1
         var bestLen = 0
-        for (v in candidates) {
-            val i = lower.indexOf(v)
-            if (i >= 0 && v.length > bestLen) {
+        fun consider(needle: String) {
+            val i = lower.indexOf(needle)
+            if (i >= 0 && (bestIdx < 0 || i < bestIdx || (i == bestIdx && needle.length > bestLen))) {
                 bestIdx = i
-                bestLen = v.length
+                bestLen = needle.length
             }
         }
-        if (bestIdx < 0) return text.trim()
-        return text.substring(bestIdx + bestLen)
-            .trim(' ', ',', '.', '!', '?', ':', '-', '—')
-            .trim()
+        if (!customWake.isNullOrBlank()) consider(customWake.trim().lowercase())
+        for (v in WAKE_VARIANTS) consider(v)
+        if (bestIdx < 0) return null
+
+        return t.substring(bestIdx + bestLen)
+            .trim(' ', '.', ',', '?', '!', ':', ';', '-', '।')
+            .ifBlank { null }
     }
 
     fun personaDefault(): String =
@@ -91,6 +95,8 @@ object MadEvents {
  *  - Init complete hone se PEHLE request aaye to speech queue ho jaati hai — pehla
  *    reply drop nahi hota ("not ready — speech dropped" bug fix).
  *  - Pitch 1.0 / rate 0.95 defaults — robotic feel khatam.
+ *  - speak() ka onDone callback UtteranceProgressListener.onDone se hi aata hai
+ *    (TTS POORA bolne ke baad) — post-wake command session isi par start hota hai.
  */
 class TtsSpeaker(private val context: Context) {
 
@@ -239,11 +245,7 @@ class TtsSpeaker(private val context: Context) {
         return s
     }
 
-    /**
-     * Speaks the text, then invokes [onDone] on the main thread — onDone SIRF
-     * UtteranceProgressListener ke andar (onDone/onError) se fire hota hai,
-     * yani speech POORA bolne ke baad hi. Post-wake command flow isi par depend karta hai.
-     */
+    /** Speaks the text, then invokes [onDone] on the main thread — ONLY after TTS fully finishes. */
     fun speak(text: String, onDone: (() -> Unit)? = null) {
         // Engine abhi initialize ho raha hai: speech QUEUE karo — drop nahi.
         if (!ready && tts != null) {
