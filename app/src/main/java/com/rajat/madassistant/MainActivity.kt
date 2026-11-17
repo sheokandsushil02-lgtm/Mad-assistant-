@@ -77,7 +77,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Live status receiver — engine yahi se live Mic/AI/TTS + "Heard:..." bhejta hai. */
+    /** Live status receiver — engine yahi se live Mic/AI/TTS + "You:/MAD:" bhejta hai. */
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
             val text = i?.getStringExtra(MadEvents.EXTRA_TEXT) ?: return
@@ -89,8 +89,11 @@ class MainActivity : AppCompatActivity() {
     private fun updateStatus(text: String) {
         when {
             text.startsWith("Mic:") -> micStatus.text = text
-            text.startsWith("AI:") -> aiStatus.text = text
             text.startsWith("TTS:") -> ttsStatus.text = text
+            text.startsWith("AI:") -> aiStatus.text = text
+            // Post-wake command flow: user command aur MAD reply AI row me dikhte hain.
+            text.startsWith("You:") -> aiStatus.text = text
+            text.startsWith("MAD:") -> aiStatus.text = "AI: ${text.removePrefix("MAD:").trim()}"
             text.startsWith("Heard:") -> {
                 aiStatus.text = "AI: ${text.removePrefix("Heard:").trim()}"
                 micStatus.text = "Mic: idle (paused)"
@@ -415,6 +418,7 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(wakeInput)
         root.addView(hint("Wake matching me ye variants automatically accept hote hain: himed, hi med, hey med, heed, hey mate, a mad, hey math, mad, मैड"))
+        root.addView(hint("One-shot bhi chalega: \"hey mad rems business kholo\" — turant command chalega."))
         root.addView(toggle("Continuous Wake-Word Listening", MadSettings.KEY_WAKE_ENABLED, true))
         root.addView(toggle("Voice Reply (TTS)", MadSettings.KEY_TTS_ENABLED, true))
         root.addView(toggle("Beep on Wake", MadSettings.KEY_BEEP_ENABLED, true))
