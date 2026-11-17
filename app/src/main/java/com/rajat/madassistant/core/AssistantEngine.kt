@@ -35,6 +35,10 @@ class AssistantEngine(private val context: Context) {
     private val reminders = ReminderManager(context)
     private var tone: ToneGenerator? = null
 
+    /** Wake partial + final dono se trigger ho sakta hai — duplicate "haan boliye" block. */
+    @Volatile
+    private var wakeTriggered = false
+
     fun start() {
         tts.start()
         loop.startWake()
@@ -56,6 +60,7 @@ class AssistantEngine(private val context: Context) {
     fun listenNow() {
         beep()
         status("AI: listening request...")
+        wakeTriggered = false
         loop.startCommand()
     }
 
@@ -89,14 +94,16 @@ class AssistantEngine(private val context: Context) {
             return
         }
         if (!prefs.getBoolean(MadSettings.KEY_WAKE_ENABLED, true)) return
-        val t = text.lowercase(Locale.getDefault())
-        val wake = (prefs.getString(MadSettings.KEY_WAKE, "hey mad") ?: "hey mad")
-            .trim().lowercase(Locale.getDefault())
-        if (t.contains(wake) || t.contains("mad") || t.contains("मद") || t.contains("मैड") || t.contains("hey mate")) {
+        if (wakeTriggered) return   // partial + final dono ne wake fire kiya ho to ek hi baar respond
+        // Fix: shared matcher — "hey mad", "himed", "hi med", "hey med", "heed",
+        // "hey mate", "a mad", "hey math", "mad", "हे मैड", "मैड" sab accept.
+        val wake = prefs.getString(MadSettings.KEY_WAKE, "hey mad")
+        if (MadSettings.matchesWake(text, wake)) {
+            wakeTriggered = true
             loop.pause()
             beep()
-            status("AI: wake word detected")
-            tts.speak(WAKE_REPLY) { loop.startCommand() }
+            status("AI: wake word detected — $text")
+            tts.speak(WAKE_REPLY) { wakeTriggered = false; loop.startCommand() }
         }
     }
 
@@ -139,7 +146,6 @@ class AssistantEngine(private val context: Context) {
             t.contains("क्या याद") || t.contains("याद है") || t.contains("what do you remember") -> recall()
             else -> {
                 // Ek hi baar call karo — pehle handle() se result lo, null ho to agla skill try karo.
-                // (Pehle condition+value se 2 baar call hota tha — reminder DOUBLE ban sakta tha.)
                 val reminderReply = runCatching { reminders.handle(text) }.getOrNull()
                 if (reminderReply != null) return reminderReply
                 val skillReply = runCatching { phoneSkills.handle(text) }.getOrNull()
