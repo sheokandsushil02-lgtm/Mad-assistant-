@@ -37,6 +37,11 @@ class AssistantForegroundService : Service() {
             ACTION_RELOAD -> engine?.reload()
             ACTION_TEST_VOICE -> engine?.testVoice()
             ACTION_TEXT_COMMAND -> intent.getStringExtra(EXTRA_TEXT)?.let { engine?.handleText(it) }
+            ACTION_HANDLE_TEXT -> {
+                // Fallback Google Voice Popup se aaya text — Gemini + TTS se jawaab.
+                val text = intent.getStringExtra(EXTRA_TEXT).orEmpty()
+                if (text.isNotBlank()) engine?.handleText(text)
+            }
         }
 
         startOverlay()
@@ -101,6 +106,7 @@ class AssistantForegroundService : Service() {
         const val ACTION_RELOAD = "com.rajat.madassistant.RELOAD"
         const val ACTION_TEST_VOICE = "com.rajat.madassistant.TEST_VOICE"
         const val ACTION_TEXT_COMMAND = "com.rajat.madassistant.TEXT_COMMAND"
+        const val ACTION_HANDLE_TEXT = "com.rajat.madassistant.HANDLE_TEXT"
         const val EXTRA_TEXT = "text"
 
         /** MainActivity isse check karta hai ki assistant chal raha hai ya nahi. */
